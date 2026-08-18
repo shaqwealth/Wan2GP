@@ -1,0 +1,148 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+//@version=5
+strategy(
+     title                = "Achat Horaire Personnalisé - SL/TP",
+     shorttitle           = "BuyFromHour SL/TP",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 100,
+     pyramiding           = 0,
+     calc_on_every_tick   = false,
+     process_orders_on_close = true)
+
+// =====================================================================================
+// ENTREES : plage horaire personnalisable (achat à partir de 7h par défaut)
+// =====================================================================================
+grpSession = "Session de trading"
+startHour   = input.int(7,  "Heure de début (achat autorisé à partir de)", minval = 0, maxval = 23, group = grpSession)
+startMinute = input.int(0,  "Minute de début",                              minval = 0, maxval = 59, group = grpSession)
+endHour     = input.int(22, "Heure de fin (dernier achat autorisé)",        minval = 0, maxval = 23, group = grpSession)
+endMinute   = input.int(0,  "Minute de fin",                                minval = 0, maxval = 59, group = grpSession)
+sessionTZ   = input.string("America/New_York", "Fuseau horaire de la session",
+     options = ["America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/Paris", "Europe/London", "UTC", "Asia/Tokyo", "Australia/Sydney"],
+     group = grpSession)
+
+closeOutsideSession = input.bool(true, "Clôturer la position en dehors de la session", group = grpSession)
+
+grpDays = "Jours de trading autorisés"
+tradeMon = input.bool(true, "Lundi",    group = grpDays, inline = "days")
+tradeTue = input.bool(true, "Mardi",    group = grpDays, inline = "days")
+tradeWed = input.bool(true, "Mercredi", group = grpDays, inline = "days2")
+tradeThu = input.bool(true, "Jeudi",    group = grpDays, inline = "days2")
+tradeFri = input.bool(true, "Vendredi", group = grpDays, inline = "days3")
+tradeSat = input.bool(false, "Samedi",  group = grpDays, inline = "days3")
+tradeSun = input.bool(false, "Dimanche", group = grpDays, inline = "days4")
+
+grpEntry = "Logique d'entrée"
+entryMode = input.string("Ouverture de session", "Mode d'entrée",
+     options = ["Ouverture de session", "Chaque bougie dans la session"], group = grpEntry,
+     tooltip = "Ouverture de session : un seul achat déclenché au début de la fenêtre horaire chaque jour.\nChaque bougie dans la session : achète dès que possible si aucune position n'est ouverte.")
+useTrendFilter = input.bool(false, "Filtrer avec une moyenne mobile (prix > MM)", group = grpEntry)
+maLength       = input.int(50, "Longueur de la moyenne mobile", minval = 1, group = grpEntry)
+
+// =====================================================================================
+// GESTION DU RISQUE : Stop Loss / Take Profit personnalisés
+// =====================================================================================
+grpRisk = "Stop Loss / Take Profit"
+useSL  = input.bool(true, "Activer le Stop Loss", group = grpRisk)
+slType = input.string("Pourcentage", "Type de Stop Loss", options = ["Pourcentage", "Points", "ATR"], group = grpRisk)
+slValue = input.float(1.0, "Valeur du Stop Loss (%, points ou multiple ATR)", minval = 0.0, step = 0.1, group = grpRisk)
+
+useTP  = input.bool(true, "Activer le Take Profit", group = grpRisk)
+tpType = input.string("Pourcentage", "Type de Take Profit", options = ["Pourcentage", "Points", "ATR"], group = grpRisk)
+tpValue = input.float(2.0, "Valeur du Take Profit (%, points ou multiple ATR)", minval = 0.0, step = 0.1, group = grpRisk)
+
+useTrailStop = input.bool(false, "Activer un Stop Suiveur (trailing stop)", group = grpRisk)
+trailPoints  = input.float(1.0, "Distance du trailing stop (%)", minval = 0.0, step = 0.1, group = grpRisk)
+trailOffset  = input.float(0.5, "Déclenchement du trailing stop (%)", minval = 0.0, step = 0.1, group = grpRisk)
+
+atrLength = input.int(14, "Longueur ATR (si SL/TP en ATR)", minval = 1, group = grpRisk)
+
+// =====================================================================================
+// CALCULS
+// =====================================================================================
+atrValue = ta.atr(atrLength)
+maValue  = ta.sma(close, maLength)
+
+barMinutes   = hour(time, sessionTZ) * 60 + minute(time, sessionTZ)
+startMinutes = startHour * 60 + startMinute
+endMinutes   = endHour * 60 + endMinute
+
+// Gère les sessions qui passent minuit (ex: 22h -> 6h)
+inSession = startMinutes <= endMinutes ?
+     (barMinutes >= startMinutes and barMinutes < endMinutes) :
+     (barMinutes >= startMinutes or  barMinutes < endMinutes)
+
+dow = dayofweek(time, sessionTZ)
+dayAllowed = (dow == dayofweek.monday    and tradeMon) or
+             (dow == dayofweek.tuesday   and tradeTue) or
+             (dow == dayofweek.wednesday and tradeWed) or
+             (dow == dayofweek.thursday  and tradeThu) or
+             (dow == dayofweek.friday    and tradeFri) or
+             (dow == dayofweek.saturday  and tradeSat) or
+             (dow == dayofweek.sunday    and tradeSun)
+
+sessionActive = inSession and dayAllowed
+
+// Détection du premier bar de la session (pour le mode "Ouverture de session")
+sessionJustStarted = sessionActive and not sessionActive[1]
+
+trendOk = not useTrendFilter or close > maValue
+
+entryTriggered = entryMode == "Ouverture de session" ? sessionJustStarted : sessionActive
+
+canEnter = entryTriggered and trendOk and strategy.position_size == 0
+
+// =====================================================================================
+// ORDRES
+// =====================================================================================
+if canEnter
+    strategy.entry("Achat", strategy.long)
+
+// Calcul des niveaux de SL / TP à partir du prix moyen d'entrée
+longStopPrice = na
+longTpPrice   = na
+
+if strategy.position_size > 0
+    entryPrice = strategy.position_avg_price
+
+    if useSL
+        longStopPrice := switch slType
+            "Pourcentage" => entryPrice * (1 - slValue / 100)
+            "Points"      => entryPrice - slValue
+            "ATR"         => entryPrice - slValue * atrValue
+
+    if useTP
+        longTpPrice := switch tpType
+            "Pourcentage" => entryPrice * (1 + tpValue / 100)
+            "Points"      => entryPrice + tpValue
+            "ATR"         => entryPrice + tpValue * atrValue
+
+    trailPointsTicks  = useTrailStop ? entryPrice * trailPoints / 100 / syminfo.mintick : na
+    trailOffsetTicks  = useTrailStop ? entryPrice * trailOffset / 100 / syminfo.mintick : na
+
+    strategy.exit(
+         id           = "Sortie",
+         from_entry   = "Achat",
+         stop         = useSL ? longStopPrice : na,
+         limit        = useTP ? longTpPrice   : na,
+         trail_points = useTrailStop ? trailPointsTicks : na,
+         trail_offset = useTrailStop ? trailOffsetTicks : na)
+
+// Clôture forcée en dehors de la session si demandé
+if closeOutsideSession and not sessionActive and strategy.position_size > 0
+    strategy.close("Achat", comment = "Fin de session")
+
+// =====================================================================================
+// AFFICHAGE
+// =====================================================================================
+bgcolor(sessionActive ? color.new(color.teal, 90) : na, title = "Fenêtre de trading")
+
+plot(strategy.position_size > 0 ? strategy.position_avg_price : na, title = "Prix d'entrée", color = color.blue, style = plot.style_linebr, linewidth = 1)
+plot(strategy.position_size > 0 and useSL ? longStopPrice : na, title = "Stop Loss",   color = color.red,   style = plot.style_linebr, linewidth = 1)
+plot(strategy.position_size > 0 and useTP ? longTpPrice   : na, title = "Take Profit", color = color.green, style = plot.style_linebr, linewidth = 1)
+plot(useTrendFilter ? maValue : na, title = "Moyenne mobile", color = color.orange)
+
+alertcondition(sessionJustStarted, title = "Début de session", message = "Début de la fenêtre de trading personnalisée")
+alertcondition(canEnter, title = "Signal d'achat", message = "Signal d'achat déclenché par le script Achat Horaire Personnalisé")
