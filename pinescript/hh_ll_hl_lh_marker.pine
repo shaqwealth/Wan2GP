@@ -119,7 +119,7 @@ posSize = strategy.position_size
 isNewEntry = goLong[1] or goShort[1]
 isExit = posSize == 0 and posSize[1] != 0 and not isNewEntry
 
-freezeLevels() =>
+if isNewEntry
     if tradeOpen
         line.set_x2(entryLine, bar_index)
         line.set_extend(entryLine, extend.none)
@@ -127,9 +127,6 @@ freezeLevels() =>
         box.set_extend(tpBox, extend.none)
         box.set_right(slBox, bar_index)
         box.set_extend(slBox, extend.none)
-
-if isNewEntry
-    freezeLevels()
     entryPrice = strategy.position_avg_price
     isLong = posSize > 0
     tpPrice = isLong ? entryPrice + tpTicks * syminfo.mintick : entryPrice - tpTicks * syminfo.mintick
@@ -141,7 +138,12 @@ if isNewEntry
     tradeOpen := true
 
 if isExit
-    freezeLevels()
+    line.set_x2(entryLine, bar_index)
+    line.set_extend(entryLine, extend.none)
+    box.set_right(tpBox, bar_index)
+    box.set_extend(tpBox, extend.none)
+    box.set_right(slBox, bar_index)
+    box.set_extend(slBox, extend.none)
     tradeOpen := false
 
 // Create Zig Zag instance from user settings.
