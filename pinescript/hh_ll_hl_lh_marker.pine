@@ -1,26 +1,26 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Future_Billi0naire_
 
-//@version=5
+//@version=6
 strategy("HH LL HL LH Marker", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, calc_on_every_tick = true, max_lines_count = 500, max_boxes_count = 500)
 
 // Importing Libarary
 import TradingView/ZigZag/7 as ZigZagLib
 
 //Input
-lb=input(5,"Left Bars")
-rb=input(5,"Right Bars")
+lb=input.int(5,"Left Bars")
+rb=input.int(5,"Right Bars")
 
-showhh=input(true,"HigherHigh")
-showhl=input(true,"HigherLow")
-showlh=input(true,"LowerHigh")
-showll=input(true,"LowerLow")
+showhh=input.bool(true,"HigherHigh")
+showhl=input.bool(true,"HigherLow")
+showlh=input.bool(true,"LowerHigh")
+showll=input.bool(true,"LowerLow")
 
 //Trade Input
-tradehh = input(true, "Trade on HigherHigh (Short)", group="Trade Setup")
-tradehl = input(true, "Trade on HigherLow (Long)", group="Trade Setup")
-tradelh = input(true, "Trade on LowerHigh (Short)", group="Trade Setup")
-tradell = input(true, "Trade on LowerLow (Long)", group="Trade Setup")
+tradehh = input.bool(true, "Trade on HigherHigh (Short)", group="Trade Setup")
+tradehl = input.bool(true, "Trade on HigherLow (Long)", group="Trade Setup")
+tradelh = input.bool(true, "Trade on LowerHigh (Short)", group="Trade Setup")
+tradell = input.bool(true, "Trade on LowerLow (Long)", group="Trade Setup")
 tpTicks = input.int(152, "Take Profit (ticks)", group="Trade Setup")
 slTicks = input.int(100, "Stop Loss (ticks)", group="Trade Setup")
 
@@ -151,11 +151,11 @@ var zigZag = ZigZagLib.newInstance(
   ZigZagLib.Settings.new(
       input.float(5.0, "Price deviation for reversals (%)", 0.00001, 100.0, 0.5, "0.00001 - 100"),
       input.int(10, "Pivot legs", 2),
-      input(color.gray, "Line color", display = display.data_window),
-      input(true, "Extend to last bar", display = display.data_window),
-      input(false, "Display reversal price", display = display.data_window),
-      input(false, "Display cumulative volume", display = display.data_window),
-      input(false, "Display reversal price change", inline = "priceRev", display = display.data_window),
+      input.color(color.gray, "Line color", display = display.data_window),
+      input.bool(true, "Extend to last bar", display = display.data_window),
+      input.bool(false, "Display reversal price", display = display.data_window),
+      input.bool(false, "Display cumulative volume", display = display.data_window),
+      input.bool(false, "Display reversal price change", inline = "priceRev", display = display.data_window),
       input.string("Absolute", "", ["Absolute", "Percent"], inline = "priceRev", display = display.data_window),
       true)
  )
