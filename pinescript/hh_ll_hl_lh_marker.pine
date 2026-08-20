@@ -17,10 +17,10 @@ showlh=input(true,"LowerHigh")
 showll=input(true,"LowerLow")
 
 //Trade Input
-tradehh = input(true, "Trade on HigherHigh (Long)", group="Trade Setup")
+tradehh = input(true, "Trade on HigherHigh (Short)", group="Trade Setup")
 tradehl = input(true, "Trade on HigherLow (Long)", group="Trade Setup")
 tradelh = input(true, "Trade on LowerHigh (Short)", group="Trade Setup")
-tradell = input(true, "Trade on LowerLow (Short)", group="Trade Setup")
+tradell = input(true, "Trade on LowerLow (Long)", group="Trade Setup")
 tpTicks = input.int(152, "Take Profit (ticks)", group="Trade Setup")
 slTicks = input.int(100, "Stop Loss (ticks)", group="Trade Setup")
 
@@ -95,8 +95,8 @@ plotshape(showll and _ll ? _ll : na, text="LL", title="Lower Low", style=shape.l
 plotshape(showlh and _lh ? _lh : na, text="LH", title="Lower High", style=shape.labeldown, color=color.red, textcolor=color.white, location=location.abovebar, offset=-rb)
 
 //Enter position when a marker fires, closing any position already en cours first
-goLong = (tradehh and showhh and _hh) or (tradehl and showhl and _hl)
-goShort = (tradelh and showlh and _lh) or (tradell and showll and _ll)
+goLong = (tradehl and showhl and _hl) or (tradell and showll and _ll)
+goShort = (tradehh and showhh and _hh) or (tradelh and showlh and _lh)
 
 if goLong or goShort
     strategy.close_all(comment="New Signal")
