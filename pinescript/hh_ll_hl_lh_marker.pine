@@ -94,10 +94,12 @@ plotshape(showhh and _hh ? _hh : na, text="HH", title="Higher High", style=shape
 plotshape(showll and _ll ? _ll : na, text="LL", title="Lower Low", style=shape.labelup, color=color.red, textcolor=color.white, location=location.belowbar, offset=-rb)
 plotshape(showlh and _lh ? _lh : na, text="LH", title="Lower High", style=shape.labeldown, color=color.red, textcolor=color.white, location=location.abovebar, offset=-rb)
 
-//Enter/reverse position when a marker fires, exit with a fixed TP/SL in ticks
+//Enter position when a marker fires, closing any position already en cours first
 goLong = (tradehh and showhh and _hh) or (tradehl and showhl and _hl)
 goShort = (tradelh and showlh and _lh) or (tradell and showll and _ll)
 
+if goLong or goShort
+    strategy.close_all(comment="New Signal")
 if goLong
     strategy.entry("Long", strategy.long)
 if goShort
@@ -113,9 +115,9 @@ var box slBox = na
 var bool tradeOpen = false
 
 posSize = strategy.position_size
-prevPosSize = posSize[1]
-isNewEntry = posSize != 0 and (prevPosSize == 0 or math.sign(posSize) != math.sign(prevPosSize))
-isExit = posSize == 0 and prevPosSize != 0
+//Entries fill on the bar after the signal, since the close is queued ahead of them
+isNewEntry = goLong[1] or goShort[1]
+isExit = posSize == 0 and posSize[1] != 0 and not isNewEntry
 
 freezeLevels() =>
     if tradeOpen
