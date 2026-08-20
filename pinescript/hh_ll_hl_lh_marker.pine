@@ -17,12 +17,12 @@ showlh=input.bool(true,"LowerHigh")
 showll=input.bool(true,"LowerLow")
 
 //Trade Input
-tradehh = input.bool(true, "Trade on HigherHigh (Short)", group="Trade Setup")
-tradehl = input.bool(true, "Trade on HigherLow (Long)", group="Trade Setup")
-tradelh = input.bool(true, "Trade on LowerHigh (Short)", group="Trade Setup")
-tradell = input.bool(true, "Trade on LowerLow (Long)", group="Trade Setup")
-tpTicks = input.int(152, "Take Profit (ticks)", group="Trade Setup")
-slTicks = input.int(100, "Stop Loss (ticks)", group="Trade Setup")
+tradehh = input.bool(true, "Trade on HigherHigh - Short", group="Trade Setup")
+tradehl = input.bool(true, "Trade on HigherLow - Long", group="Trade Setup")
+tradelh = input.bool(true, "Trade on LowerHigh - Short", group="Trade Setup")
+tradell = input.bool(true, "Trade on LowerLow - Long", group="Trade Setup")
+tpTicks = input.int(152, "Take Profit - Ticks", group="Trade Setup")
+slTicks = input.int(100, "Stop Loss - Ticks", group="Trade Setup")
 
 entryLineColor = input.color(color.gray, "Entry Line Color", group="Trade Setup")
 tpZoneColor = input.color(color.blue, "Take Profit Zone Color", group="Trade Setup")
@@ -149,7 +149,7 @@ if isExit
 // Create Zig Zag instance from user settings.
 var zigZag = ZigZagLib.newInstance(
   ZigZagLib.Settings.new(
-      input.float(5.0, "Price deviation for reversals (%)", 0.00001, 100.0, 0.5, "0.00001 - 100"),
+      input.float(5.0, "Price deviation for reversals %", 0.00001, 100.0, 0.5, "0.00001 - 100"),
       input.int(10, "Pivot legs", 2),
       input.color(color.gray, "Line color", display = display.data_window),
       input.bool(true, "Extend to last bar", display = display.data_window),
