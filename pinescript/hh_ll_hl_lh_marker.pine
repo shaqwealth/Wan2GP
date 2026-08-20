@@ -2,7 +2,7 @@
 // © Future_Billi0naire_
 
 //@version=5
-strategy("HH LL HL LH Marker", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, calc_on_every_tick = true)
+strategy("HH LL HL LH Marker", overlay = true, default_qty_type = strategy.fixed, default_qty_value = 1, calc_on_every_tick = true, max_lines_count = 500, max_boxes_count = 500)
 
 // Importing Libarary
 import TradingView/ZigZag/7 as ZigZagLib
@@ -23,6 +23,10 @@ tradelh = input(true, "Trade on LowerHigh (Short)", group="Trade Setup")
 tradell = input(true, "Trade on LowerLow (Short)", group="Trade Setup")
 tpTicks = input.int(152, "Take Profit (ticks)", group="Trade Setup")
 slTicks = input.int(100, "Stop Loss (ticks)", group="Trade Setup")
+
+entryLineColor = input.color(color.gray, "Entry Line Color", group="Trade Setup")
+tpZoneColor = input.color(color.blue, "Take Profit Zone Color", group="Trade Setup")
+slZoneColor = input.color(color.red, "Stop Loss Zone Color", group="Trade Setup")
 
 //Define Pivot points
 ph=ta.pivothigh(lb,rb)
@@ -101,6 +105,42 @@ if goShort
 
 strategy.exit("Long TP/SL", from_entry="Long", profit=tpTicks, loss=slTicks)
 strategy.exit("Short TP/SL", from_entry="Short", profit=tpTicks, loss=slTicks)
+
+//Draw entry/TP/SL levels for the open trade
+var line entryLine = na
+var box tpBox = na
+var box slBox = na
+var bool tradeOpen = false
+
+posSize = strategy.position_size
+prevPosSize = posSize[1]
+isNewEntry = posSize != 0 and (prevPosSize == 0 or math.sign(posSize) != math.sign(prevPosSize))
+isExit = posSize == 0 and prevPosSize != 0
+
+freezeLevels() =>
+    if tradeOpen
+        line.set_x2(entryLine, bar_index)
+        line.set_extend(entryLine, extend.none)
+        box.set_right(tpBox, bar_index)
+        box.set_extend(tpBox, extend.none)
+        box.set_right(slBox, bar_index)
+        box.set_extend(slBox, extend.none)
+
+if isNewEntry
+    freezeLevels()
+    entryPrice = strategy.position_avg_price
+    isLong = posSize > 0
+    tpPrice = isLong ? entryPrice + tpTicks * syminfo.mintick : entryPrice - tpTicks * syminfo.mintick
+    slPrice = isLong ? entryPrice - slTicks * syminfo.mintick : entryPrice + slTicks * syminfo.mintick
+
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=entryLineColor, width=1, extend=extend.right)
+    tpBox := box.new(bar_index, math.max(entryPrice, tpPrice), bar_index, math.min(entryPrice, tpPrice), border_color=na, extend=extend.right, bgcolor=color.new(tpZoneColor, 85))
+    slBox := box.new(bar_index, math.max(entryPrice, slPrice), bar_index, math.min(entryPrice, slPrice), border_color=na, extend=extend.right, bgcolor=color.new(slZoneColor, 85))
+    tradeOpen := true
+
+if isExit
+    freezeLevels()
+    tradeOpen := false
 
 // Create Zig Zag instance from user settings.
 var zigZag = ZigZagLib.newInstance(
