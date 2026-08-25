@@ -1,5 +1,5 @@
 //@version=6
-strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false, pyramiding=0)
+strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false, pyramiding=0, max_lines_count=500, max_labels_count=500)
 
 // Enters once per day at the NY 9:00 AM open, direction set by the 5-minute
 // 8:55 AM (America/New_York) candle: bullish -> long, bearish -> short.
@@ -7,9 +7,10 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // candle is used as the reference instead.
 // Run this strategy on the 5-minute chart.
 
-tpTicks = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
-slTicks = input.int(200, "Stop Loss (ticks)",   minval=1, group="Risk")
-qty     = input.float(1, "Order size", minval=0.01, group="Order")
+tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
+slTicks   = input.int(200, "Stop Loss (ticks)",   minval=1, group="Risk")
+qty       = input.float(1, "Order size", minval=0.01, group="Order")
+showLines = input.bool(true, "Show entry/TP/SL lines", group="Display")
 
 tz = "America/New_York"
 nyHour   = hour(time, tz)
@@ -40,3 +41,31 @@ if is0855Bar and not tradedToday
     else if bearish
         strategy.entry("Short", strategy.short, qty=qty)
         strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks)
+
+// --- Entry / TP / SL lines for the active trade ---
+var line entryLine = na
+var line tpLine    = na
+var line slLine    = na
+
+posSizePrev = strategy.position_size[1]
+justEntered = strategy.position_size != 0 and (posSizePrev == 0 or math.sign(strategy.position_size) != math.sign(posSizePrev))
+inTrade     = strategy.position_size != 0
+
+if showLines and justEntered
+    float entryPrice = strategy.position_avg_price
+    float dir        = strategy.position_size > 0 ? 1.0 : -1.0
+    float tpPrice    = entryPrice + dir * tpTicks * syminfo.mintick
+    float slPrice    = entryPrice - dir * slTicks * syminfo.mintick
+
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=color.blue,  width=1, style=line.style_solid)
+    tpLine    := line.new(bar_index, tpPrice,    bar_index, tpPrice,    color=color.green, width=1, style=line.style_dashed)
+    slLine    := line.new(bar_index, slPrice,    bar_index, slPrice,    color=color.red,   width=1, style=line.style_dashed)
+
+    label.new(bar_index, entryPrice, "Entry " + str.tostring(entryPrice), color=color.blue,  style=label.style_label_right, textcolor=color.white, size=size.small)
+    label.new(bar_index, tpPrice,    "TP " + str.tostring(tpPrice),       color=color.green, style=label.style_label_right, textcolor=color.white, size=size.small)
+    label.new(bar_index, slPrice,    "SL " + str.tostring(slPrice),       color=color.red,   style=label.style_label_right, textcolor=color.white, size=size.small)
+
+if showLines and inTrade and not na(entryLine)
+    line.set_x2(entryLine, bar_index)
+    line.set_x2(tpLine, bar_index)
+    line.set_x2(slLine, bar_index)
