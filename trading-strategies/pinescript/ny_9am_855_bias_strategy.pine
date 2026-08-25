@@ -12,9 +12,10 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // its range) never counts as confirmation; the wait continues.
 // Trade V3 (optional, replaces V1/V2 when on): trades the 8:00-9:00 AM
 // (America/New_York) opening range instead of the 8:55 candle. The first
-// close beyond the range high/low after 9:00 is the entry; if price
-// closes back inside the range before TP/SL, that failed breakout is
-// faded once with an opposite-direction trade.
+// close beyond the range high/low within a custom entry window (default
+// 9:30-11:00 AM) is the entry; if price closes back inside the range
+// before TP/SL, that failed breakout is faded once with an opposite-
+// direction trade.
 // Run this strategy on the 5-minute chart.
 
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
@@ -26,6 +27,10 @@ dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of 
 enableV3       = input.bool(false, "Trade V3: 8-9am range breakout, fade once on failure (overrides V1/V2)", group="Strategy")
 tpTicksV3      = input.int(450, "V3 Take Profit (ticks)", minval=1, group="Strategy")
 slTicksV3      = input.int(300, "V3 Stop Loss (ticks)",   minval=1, group="Strategy")
+v3StartHour    = input.int(9,  "V3 entry window start hour (NY)",   minval=0, maxval=23, group="Strategy")
+v3StartMinute  = input.int(30, "V3 entry window start minute",      minval=0, maxval=59, group="Strategy")
+v3EndHour      = input.int(11, "V3 entry window end hour (NY)",     minval=0, maxval=23, group="Strategy")
+v3EndMinute    = input.int(0,  "V3 entry window end minute",        minval=0, maxval=59, group="Strategy")
 
 enableHighlight  = input.bool(true, "Highlight big candles", group="Highlight")
 bigCandleMeasure = input.string("Range (High-Low)", "Measure", options=["Range (High-Low)", "Body (|Close-Open|)"], group="Highlight")
@@ -83,7 +88,12 @@ if enableV3 and nyHour == 8
 plot(enableV3 and not na(rangeHigh) ? rangeHigh : na, color=color.blue,   style=plot.style_line, title="Opening Range High")
 plot(enableV3 and not na(rangeLow)  ? rangeLow  : na, color=color.orange, style=plot.style_line, title="Opening Range Low")
 
-canBreakoutV3 = enableV3 and nyHour >= 9 and not na(rangeHigh) and not na(rangeLow)
+nyMinuteOfDay  = nyHour * 60 + nyMinute
+v3WindowStart  = v3StartHour * 60 + v3StartMinute
+v3WindowEnd    = v3EndHour * 60 + v3EndMinute
+inV3TradeWindow = nyMinuteOfDay >= v3WindowStart and nyMinuteOfDay <= v3WindowEnd
+
+canBreakoutV3 = enableV3 and inV3TradeWindow and not na(rangeHigh) and not na(rangeLow)
 
 if canBreakoutV3 and not tradedV3Today
     if close > rangeHigh
