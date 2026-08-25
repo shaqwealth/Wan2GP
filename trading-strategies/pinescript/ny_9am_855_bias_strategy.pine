@@ -5,11 +5,15 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // 8:55 AM (America/New_York) candle: bullish -> long, bearish -> short.
 // If the 8:55 candle is flat (close == open, no clear bias), the 8:50
 // candle is used as the reference instead.
+// Trade V2 (optional): if that trade is stopped out, one reversal trade
+// is taken in the opposite direction with the same TP/SL.
 // Run this strategy on the 5-minute chart.
 
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
 slTicks   = input.int(200, "Stop Loss (ticks)",   minval=1, group="Risk")
 qty       = input.float(1, "Order size", minval=0.01, group="Order")
+
+enableV2  = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
 
 showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
 entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
@@ -29,12 +33,15 @@ nyDay    = dayofmonth(time, tz)
 
 is0855Bar = nyHour == 8 and nyMinute == 55
 
-var bool tradedToday = false
-var int  lastDay = na
+var bool  tradedToday  = false
+var bool  v2Used       = false
+var float lastTradeDir = na
+var int   lastDay = na
 
 if na(lastDay) or nyDay != lastDay
     lastDay := nyDay
     tradedToday := false
+    v2Used := false
 
 if is0855Bar and not tradedToday
     tradedToday := true
@@ -47,10 +54,27 @@ if is0855Bar and not tradedToday
 
     if bullish
         strategy.entry("Long", strategy.long, qty=qty)
-        strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks)
+        strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := 1.0
     else if bearish
         strategy.entry("Short", strategy.short, qty=qty)
-        strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks)
+        strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := -1.0
+
+// --- Trade V2: reverse once if the current trade was stopped out ---
+justExited = strategy.position_size == 0 and strategy.position_size[1] != 0
+
+if enableV2 and justExited and not v2Used and strategy.closedtrades > 0
+    if strategy.closedtrades.exit_comment(strategy.closedtrades - 1) == "SL"
+        v2Used := true
+        if lastTradeDir == 1.0
+            strategy.entry("Short V2", strategy.short, qty=qty)
+            strategy.exit("Short V2 Exit", "Short V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+            lastTradeDir := -1.0
+        else if lastTradeDir == -1.0
+            strategy.entry("Long V2", strategy.long, qty=qty)
+            strategy.exit("Long V2 Exit", "Long V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+            lastTradeDir := 1.0
 
 // --- Entry / TP / SL lines + shaded zones for the active trade ---
 var line     entryLine = na
