@@ -8,14 +8,16 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // Trade V2 (optional): if that trade is stopped out, one reversal trade
 // is taken with the same TP/SL, once the first confirming candle closes
 // (first bearish close to go short after a failed long, first bullish
-// close to go long after a failed short).
+// close to go long after a failed short). A Doji (tiny body relative to
+// its range) never counts as confirmation; the wait continues.
 // Run this strategy on the 5-minute chart.
 
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
 slTicks   = input.int(200, "Stop Loss (ticks)",   minval=1, group="Risk")
 qty       = input.float(1, "Order size", minval=0.01, group="Order")
 
-enableV2  = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
+enableV2       = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
+dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (Doji filter)", minval=0, maxval=100, group="Strategy") / 100
 
 showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
 entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
@@ -79,8 +81,10 @@ if enableV2 and justExited and not v2Used and strategy.closedtrades > 0
         v2PendingDir := lastTradeDir == 1.0 ? -1.0 : 1.0
 
 if v2Pending
-    bool candleBullish = close > open
-    bool candleBearish = close < open
+    float candleRange = high - low
+    bool  isDoji       = candleRange > 0 and (math.abs(close - open) / candleRange) <= dojiMaxBodyPct
+    bool  candleBullish = close > open and not isDoji
+    bool  candleBearish = close < open and not isDoji
     if v2PendingDir == -1.0 and candleBearish
         v2Pending := false
         strategy.entry("Short V2", strategy.short, qty=qty)
