@@ -1,0 +1,96 @@
+//@version=6
+strategy("9:29 / 9:30 Candle Strategy", overlay=true,
+     default_qty_type = strategy.fixed, default_qty_value = 1,
+     calc_on_every_tick = false, process_orders_on_close = true)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+grpRisk = "Risk"
+slTicks = input.int(200, "Stop Loss (ticks)", minval = 1, group = grpRisk)
+tpTicks = input.int(300, "Take Profit (ticks)", minval = 1, group = grpRisk)
+
+grpSession = "Session"
+sessionTZ = input.string("America/New_York", "Session Timezone", group = grpSession)
+
+grpLines = "Lines"
+longEntryColor  = input.color(color.blue,   "Long Entry Line Color",  group = grpLines)
+shortEntryColor = input.color(color.orange, "Short Entry Line Color", group = grpLines)
+tpLineColor     = input.color(color.green,  "TP Line Color",          group = grpLines)
+slLineColor     = input.color(color.red,    "SL Line Color",          group = grpLines)
+lineWidth       = input.int(1, "Line Width", minval = 1, maxval = 4, group = grpLines)
+lineStyleInput  = input.string("Solid", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = grpLines)
+
+grpZones = "Zones"
+tpZoneColor = input.color(color.new(color.green, 85), "TP Zone Highlight Color", group = grpZones)
+slZoneColor = input.color(color.new(color.red,   85), "SL Zone Highlight Color", group = grpZones)
+showZones   = input.bool(true, "Show TP/SL Highlight Zones", group = grpZones)
+
+// ───────────────────────────── Helpers ─────────────────────────────
+getLineStyle(styleStr) =>
+    styleStr == "Dashed" ? line.style_dashed : styleStr == "Dotted" ? line.style_dotted : line.style_solid
+
+lineStyleVal = getLineStyle(lineStyleInput)
+tickSize = syminfo.mintick
+
+// ───────────────────────── 9:29 / 9:30 candles ─────────────────────────
+isT929 = hour(time, sessionTZ) == 9 and minute(time, sessionTZ) == 29
+isT930 = hour(time, sessionTZ) == 9 and minute(time, sessionTZ) == 30
+
+var bool bullish929 = na
+var bool bearish929 = na
+
+if isT929
+    bullish929 := close > open
+    bearish929 := close < open
+
+longCondition  = isT930 and bullish929 and close > open and strategy.position_size == 0
+shortCondition = isT930 and bearish929 and close < open and strategy.position_size == 0
+
+// ───────────────────────── Drawing objects state ─────────────────────────
+var line entryLine = na
+var line tpLine    = na
+var line slLine    = na
+var box  tpBox     = na
+var box  slBox     = na
+
+// ───────────────────────────── Long entry ─────────────────────────────
+if longCondition
+    entryPrice = close
+    slPrice = entryPrice - slTicks * tickSize
+    tpPrice = entryPrice + tpTicks * tickSize
+
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop = slPrice, limit = tpPrice)
+
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color = longEntryColor, width = lineWidth, style = lineStyleVal)
+    tpLine    := line.new(bar_index, tpPrice, bar_index, tpPrice, color = tpLineColor, width = lineWidth, style = lineStyleVal)
+    slLine    := line.new(bar_index, slPrice, bar_index, slPrice, color = slLineColor, width = lineWidth, style = lineStyleVal)
+
+    if showZones
+        tpBox := box.new(bar_index, tpPrice, bar_index, entryPrice, border_color = color.new(color.white, 100), bgcolor = tpZoneColor)
+        slBox := box.new(bar_index, entryPrice, bar_index, slPrice, border_color = color.new(color.white, 100), bgcolor = slZoneColor)
+
+// ───────────────────────────── Short entry ─────────────────────────────
+if shortCondition
+    entryPrice = close
+    slPrice = entryPrice + slTicks * tickSize
+    tpPrice = entryPrice - tpTicks * tickSize
+
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop = slPrice, limit = tpPrice)
+
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color = shortEntryColor, width = lineWidth, style = lineStyleVal)
+    tpLine    := line.new(bar_index, tpPrice, bar_index, tpPrice, color = tpLineColor, width = lineWidth, style = lineStyleVal)
+    slLine    := line.new(bar_index, slPrice, bar_index, slPrice, color = slLineColor, width = lineWidth, style = lineStyleVal)
+
+    if showZones
+        tpBox := box.new(bar_index, entryPrice, bar_index, tpPrice, border_color = color.new(color.white, 100), bgcolor = tpZoneColor)
+        slBox := box.new(bar_index, slPrice, bar_index, entryPrice, border_color = color.new(color.white, 100), bgcolor = slZoneColor)
+
+// ───────────────────────── Extend lines/zones while in trade ─────────────────────────
+if strategy.position_size != 0
+    line.set_x2(entryLine, bar_index)
+    line.set_x2(tpLine, bar_index)
+    line.set_x2(slLine, bar_index)
+    if showZones
+        box.set_right(tpBox, bar_index)
+        box.set_right(slBox, bar_index)
