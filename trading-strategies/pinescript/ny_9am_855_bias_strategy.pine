@@ -3,6 +3,8 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 
 // Enters once per day at the NY 9:00 AM open, direction set by the 5-minute
 // 8:55 AM (America/New_York) candle: bullish -> long, bearish -> short.
+// If the 8:55 candle is flat (close == open, no clear bias), the 8:50
+// candle is used as the reference instead.
 // Run this strategy on the 5-minute chart.
 
 tpTicks = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
@@ -25,9 +27,16 @@ if na(lastDay) or nyDay != lastDay
 
 if is0855Bar and not tradedToday
     tradedToday := true
-    if close > open
+    bool bullish = close > open
+    bool bearish = close < open
+    if not bullish and not bearish
+        // 8:55 candle is flat -> fall back to the 8:50 candle
+        bullish := close[1] > open[1]
+        bearish := close[1] < open[1]
+
+    if bullish
         strategy.entry("Long", strategy.long, qty=qty)
         strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks)
-    else if close < open
+    else if bearish
         strategy.entry("Short", strategy.short, qty=qty)
         strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks)
