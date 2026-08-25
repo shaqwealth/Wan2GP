@@ -6,7 +6,9 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // If the 8:55 candle is flat (close == open, no clear bias), the 8:50
 // candle is used as the reference instead.
 // Trade V2 (optional): if that trade is stopped out, one reversal trade
-// is taken in the opposite direction with the same TP/SL.
+// is taken with the same TP/SL, once the first confirming candle closes
+// (first bearish close to go short after a failed long, first bullish
+// close to go long after a failed short).
 // Run this strategy on the 5-minute chart.
 
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
@@ -33,15 +35,18 @@ nyDay    = dayofmonth(time, tz)
 
 is0855Bar = nyHour == 8 and nyMinute == 55
 
-var bool  tradedToday  = false
-var bool  v2Used       = false
-var float lastTradeDir = na
+var bool  tradedToday   = false
+var bool  v2Used        = false
+var bool  v2Pending     = false
+var float v2PendingDir  = na
+var float lastTradeDir  = na
 var int   lastDay = na
 
 if na(lastDay) or nyDay != lastDay
     lastDay := nyDay
     tradedToday := false
     v2Used := false
+    v2Pending := false
 
 if is0855Bar and not tradedToday
     tradedToday := true
@@ -62,19 +67,30 @@ if is0855Bar and not tradedToday
         lastTradeDir := -1.0
 
 // --- Trade V2: reverse once if the current trade was stopped out ---
+// On stop-out, wait for the first confirming candle before reversing:
+// first bearish close to go short after a failed long, first bullish
+// close to go long after a failed short.
 justExited = strategy.position_size == 0 and strategy.position_size[1] != 0
 
 if enableV2 and justExited and not v2Used and strategy.closedtrades > 0
     if strategy.closedtrades.exit_comment(strategy.closedtrades - 1) == "SL"
         v2Used := true
-        if lastTradeDir == 1.0
-            strategy.entry("Short V2", strategy.short, qty=qty)
-            strategy.exit("Short V2 Exit", "Short V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
-            lastTradeDir := -1.0
-        else if lastTradeDir == -1.0
-            strategy.entry("Long V2", strategy.long, qty=qty)
-            strategy.exit("Long V2 Exit", "Long V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
-            lastTradeDir := 1.0
+        v2Pending := true
+        v2PendingDir := lastTradeDir == 1.0 ? -1.0 : 1.0
+
+if v2Pending
+    bool candleBullish = close > open
+    bool candleBearish = close < open
+    if v2PendingDir == -1.0 and candleBearish
+        v2Pending := false
+        strategy.entry("Short V2", strategy.short, qty=qty)
+        strategy.exit("Short V2 Exit", "Short V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := -1.0
+    else if v2PendingDir == 1.0 and candleBullish
+        v2Pending := false
+        strategy.entry("Long V2", strategy.long, qty=qty)
+        strategy.exit("Long V2 Exit", "Long V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := 1.0
 
 // --- Entry / TP / SL lines + shaded zones for the active trade ---
 var line     entryLine = na
