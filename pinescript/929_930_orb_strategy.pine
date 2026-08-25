@@ -1,5 +1,5 @@
 //@version=6
-strategy("9:29 / 9:30 Candle Strategy", overlay=true,
+strategy("9:30 Candle Strategy", overlay=true,
      default_qty_type = strategy.fixed, default_qty_value = 1,
      calc_on_every_tick = false, process_orders_on_close = true)
 
@@ -31,19 +31,11 @@ getLineStyle(styleStr) =>
 lineStyleVal = getLineStyle(lineStyleInput)
 tickSize = syminfo.mintick
 
-// ───────────────────────── 9:29 / 9:30 candles ─────────────────────────
-isT929 = hour(time, sessionTZ) == 9 and minute(time, sessionTZ) == 29
+// ───────────────────────── 9:30 candle (reference) ─────────────────────────
 isT930 = hour(time, sessionTZ) == 9 and minute(time, sessionTZ) == 30
 
-var bool bullish929 = bool(na)
-var bool bearish929 = bool(na)
-
-if isT929
-    bullish929 := close > open
-    bearish929 := close < open
-
-longCondition  = isT930 and bullish929 and close > open and strategy.position_size == 0
-shortCondition = isT930 and bearish929 and close < open and strategy.position_size == 0
+longCondition  = isT930 and close > open and strategy.position_size == 0
+shortCondition = isT930 and close < open and strategy.position_size == 0
 
 // ───────────────────────── Drawing objects state ─────────────────────────
 var line entryLine = na
