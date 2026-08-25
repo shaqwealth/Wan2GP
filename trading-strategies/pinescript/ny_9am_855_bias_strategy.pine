@@ -1,5 +1,5 @@
 //@version=6
-strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false, pyramiding=0, max_lines_count=500, max_labels_count=500)
+strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false, pyramiding=0, max_lines_count=500)
 
 // Enters once per day at the NY 9:00 AM open, direction set by the 5-minute
 // 8:55 AM (America/New_York) candle: bullish -> long, bearish -> short.
@@ -10,7 +10,17 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
 slTicks   = input.int(200, "Stop Loss (ticks)",   minval=1, group="Risk")
 qty       = input.float(1, "Order size", minval=0.01, group="Order")
-showLines = input.bool(true, "Show entry/TP/SL lines", group="Display")
+
+showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
+entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
+tpColor     = input.color(color.green,                 "TP line color",     group="Display")
+slColor     = input.color(color.red,                   "SL line color",     group="Display")
+tpZoneColor = input.color(color.new(color.green, 85),   "Entry->TP zone color", group="Display")
+slZoneColor = input.color(color.new(color.red, 85),     "Entry->SL zone color", group="Display")
+lineWidth   = input.int(1, "Line width", minval=1, maxval=4, group="Display")
+lineStyleIn = input.string("Dashed", "TP/SL line style", options=["Solid", "Dashed", "Dotted"], group="Display")
+
+lineStyle = lineStyleIn == "Solid" ? line.style_solid : lineStyleIn == "Dotted" ? line.style_dotted : line.style_dashed
 
 tz = "America/New_York"
 nyHour   = hour(time, tz)
@@ -42,10 +52,12 @@ if is0855Bar and not tradedToday
         strategy.entry("Short", strategy.short, qty=qty)
         strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks)
 
-// --- Entry / TP / SL lines for the active trade ---
-var line entryLine = na
-var line tpLine    = na
-var line slLine    = na
+// --- Entry / TP / SL lines + shaded zones for the active trade ---
+var line     entryLine = na
+var line     tpLine    = na
+var line     slLine    = na
+var linefill tpFill    = na
+var linefill slFill    = na
 
 posSizePrev = strategy.position_size[1]
 justEntered = strategy.position_size != 0 and (posSizePrev == 0 or math.sign(strategy.position_size) != math.sign(posSizePrev))
@@ -57,13 +69,12 @@ if showLines and justEntered
     float tpPrice    = entryPrice + dir * tpTicks * syminfo.mintick
     float slPrice    = entryPrice - dir * slTicks * syminfo.mintick
 
-    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=color.blue,  width=1, style=line.style_solid)
-    tpLine    := line.new(bar_index, tpPrice,    bar_index, tpPrice,    color=color.green, width=1, style=line.style_dashed)
-    slLine    := line.new(bar_index, slPrice,    bar_index, slPrice,    color=color.red,   width=1, style=line.style_dashed)
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=entryColor, width=lineWidth, style=line.style_solid)
+    tpLine    := line.new(bar_index, tpPrice,    bar_index, tpPrice,    color=tpColor,    width=lineWidth, style=lineStyle)
+    slLine    := line.new(bar_index, slPrice,    bar_index, slPrice,    color=slColor,    width=lineWidth, style=lineStyle)
 
-    label.new(bar_index, entryPrice, "Entry " + str.tostring(entryPrice), color=color.blue,  style=label.style_label_right, textcolor=color.white, size=size.small)
-    label.new(bar_index, tpPrice,    "TP " + str.tostring(tpPrice),       color=color.green, style=label.style_label_right, textcolor=color.white, size=size.small)
-    label.new(bar_index, slPrice,    "SL " + str.tostring(slPrice),       color=color.red,   style=label.style_label_right, textcolor=color.white, size=size.small)
+    tpFill := linefill.new(entryLine, tpLine, color=tpZoneColor)
+    slFill := linefill.new(entryLine, slLine, color=slZoneColor)
 
 if showLines and inTrade and not na(entryLine)
     line.set_x2(entryLine, bar_index)
