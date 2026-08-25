@@ -35,8 +35,8 @@ tickSize = syminfo.mintick
 isT929 = hour(time, sessionTZ) == 9 and minute(time, sessionTZ) == 29
 isT930 = hour(time, sessionTZ) == 9 and minute(time, sessionTZ) == 30
 
-var bool bullish929 = na
-var bool bearish929 = na
+var bool bullish929 = bool(na)
+var bool bearish929 = bool(na)
 
 if isT929
     bullish929 := close > open
