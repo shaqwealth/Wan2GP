@@ -24,6 +24,15 @@ qty       = input.float(1, "Order size", minval=0.01, group="Order")
 enableV2       = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
 dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (Doji filter)", minval=0, maxval=100, group="Strategy") / 100
 enableV3       = input.bool(false, "Trade V3: 8-9am range breakout, fade once on failure (overrides V1/V2)", group="Strategy")
+tpTicksV3      = input.int(450, "V3 Take Profit (ticks)", minval=1, group="Strategy")
+slTicksV3      = input.int(300, "V3 Stop Loss (ticks)",   minval=1, group="Strategy")
+
+enableHighlight  = input.bool(true, "Highlight big candles", group="Highlight")
+bigCandleMeasure = input.string("Range (High-Low)", "Measure", options=["Range (High-Low)", "Body (|Close-Open|)"], group="Highlight")
+bigCandleTicks   = input.int(300, "Highlight if candle size >= X ticks", minval=1, group="Highlight")
+highlightColor   = input.color(color.new(color.yellow, 60), "Highlight color", group="Highlight")
+highlightStartHr = input.int(8,  "Time filter start hour (NY)", minval=0, maxval=23, group="Highlight")
+highlightEndHr   = input.int(11, "Time filter end hour (NY)",   minval=0, maxval=23, group="Highlight")
 
 showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
 entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
@@ -81,12 +90,12 @@ if canBreakoutV3 and not tradedV3Today
         tradedV3Today := true
         v3Dir := 1.0
         strategy.entry("Long V3", strategy.long, qty=qty)
-        strategy.exit("Long V3 Exit", "Long V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        strategy.exit("Long V3 Exit", "Long V3", profit=tpTicksV3, loss=slTicksV3, comment_profit="TP", comment_loss="SL")
     else if close < rangeLow
         tradedV3Today := true
         v3Dir := -1.0
         strategy.entry("Short V3", strategy.short, qty=qty)
-        strategy.exit("Short V3 Exit", "Short V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        strategy.exit("Short V3 Exit", "Short V3", profit=tpTicksV3, loss=slTicksV3, comment_profit="TP", comment_loss="SL")
 
 // --- Trade V3: fade once if the breakout fails (price closes back inside the range) ---
 inTradeV3       = enableV3 and tradedV3Today and strategy.position_size != 0
@@ -97,11 +106,11 @@ if inTradeV3 and not v3Reversed and backInsideRange
     if v3Dir == 1.0
         v3Dir := -1.0
         strategy.entry("Short V3 Fade", strategy.short, qty=qty)
-        strategy.exit("Short V3 Fade Exit", "Short V3 Fade", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        strategy.exit("Short V3 Fade Exit", "Short V3 Fade", profit=tpTicksV3, loss=slTicksV3, comment_profit="TP", comment_loss="SL")
     else
         v3Dir := 1.0
         strategy.entry("Long V3 Fade", strategy.long, qty=qty)
-        strategy.exit("Long V3 Fade Exit", "Long V3 Fade", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        strategy.exit("Long V3 Fade Exit", "Long V3 Fade", profit=tpTicksV3, loss=slTicksV3, comment_profit="TP", comment_loss="SL")
 
 if is0855Bar and not tradedToday and not enableV3
     tradedToday := true
@@ -161,10 +170,12 @@ justEntered = strategy.position_size != 0 and (posSizePrev == 0 or math.sign(str
 inTrade     = strategy.position_size != 0
 
 if showLines and justEntered
-    float entryPrice = strategy.position_avg_price
-    float dir        = strategy.position_size > 0 ? 1.0 : -1.0
-    float tpPrice    = entryPrice + dir * tpTicks * syminfo.mintick
-    float slPrice    = entryPrice - dir * slTicks * syminfo.mintick
+    float entryPrice   = strategy.position_avg_price
+    float dir          = strategy.position_size > 0 ? 1.0 : -1.0
+    float tpTicksActive = enableV3 ? tpTicksV3 : tpTicks
+    float slTicksActive = enableV3 ? slTicksV3 : slTicks
+    float tpPrice    = entryPrice + dir * tpTicksActive * syminfo.mintick
+    float slPrice    = entryPrice - dir * slTicksActive * syminfo.mintick
 
     entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=entryColor, width=lineWidth, style=line.style_solid)
     tpLine    := line.new(bar_index, tpPrice,    bar_index, tpPrice,    color=tpColor,    width=lineWidth, style=lineStyle)
@@ -177,3 +188,11 @@ if showLines and inTrade and not na(entryLine)
     line.set_x2(entryLine, bar_index)
     line.set_x2(tpLine, bar_index)
     line.set_x2(slLine, bar_index)
+
+// --- Highlight candles bigger than a custom tick threshold, within a custom NY time window ---
+candleSizePrice = bigCandleMeasure == "Range (High-Low)" ? high - low : math.abs(close - open)
+candleSizeTicks = candleSizePrice / syminfo.mintick
+inHighlightWindow = nyHour >= highlightStartHr and nyHour < highlightEndHr
+isBigCandle = candleSizeTicks >= bigCandleTicks
+
+bgcolor(enableHighlight and inHighlightWindow and isBigCandle ? highlightColor : na)
