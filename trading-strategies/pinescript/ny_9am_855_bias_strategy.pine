@@ -96,15 +96,25 @@ if is0855Bar and not tradedToday
 // close to go long after a failed short.
 justExited = strategy.position_size == 0 and strategy.position_size[1] != 0
 
+v2JustArmed    = false
+v2JustNotArmed = false
+var string lastExitComment = na
+
 if enableV2 and justExited and not v2Used and strategy.closedtrades > 0
-    if strategy.closedtrades.exit_comment(strategy.closedtrades - 1) == "SL"
+    lastExitComment := strategy.closedtrades.exit_comment(strategy.closedtrades - 1)
+    if lastExitComment == "SL"
         v2Used := true
         v2Pending := true
         v2PendingDir := lastTradeDir == 1.0 ? -1.0 : 1.0
-        if showDebugLabels
-            label.new(bar_index, high, "V2 armed\nwaiting for " + (v2PendingDir == 1.0 ? "bullish" : "bearish") + " close", color=color.purple, style=label.style_label_down, textcolor=color.white, size=size.small)
-    else if showDebugLabels
-        label.new(bar_index, low, "Exit: " + strategy.closedtrades.exit_comment(strategy.closedtrades - 1), color=color.gray, style=label.style_label_up, textcolor=color.white, size=size.tiny)
+        v2JustArmed := true
+    else
+        v2JustNotArmed := true
+
+if showDebugLabels and v2JustArmed
+    label.new(bar_index, high, "V2 armed\nwaiting for " + (v2PendingDir == 1.0 ? "bullish" : "bearish") + " close", color=color.purple, style=label.style_label_down, textcolor=color.white, size=size.small)
+
+if showDebugLabels and v2JustNotArmed
+    label.new(bar_index, low, "Exit: " + lastExitComment, color=color.gray, style=label.style_label_up, textcolor=color.white, size=size.tiny)
 
 if v2Pending
     float candleRange = high - low
@@ -125,16 +135,17 @@ if v2Pending
 // --- Trade V3: trade the opposite-side break, once one side is already broken ---
 canWatchV3 = enableV3 and nyHour != 8 and not na(rangeHigh) and not na(rangeLow) and not tradedV3Today
 
+v3JustBrokeHigh = false
+v3JustBrokeLow  = false
+
 if canWatchV3
     if na(v3BrokenSide)
         if close > rangeHigh
             v3BrokenSide := "high"
-            if showDebugLabels
-                label.new(bar_index, high, "V3: high broken\nwaiting for low break", color=color.blue, style=label.style_label_down, textcolor=color.white, size=size.small)
+            v3JustBrokeHigh := true
         else if close < rangeLow
             v3BrokenSide := "low"
-            if showDebugLabels
-                label.new(bar_index, low, "V3: low broken\nwaiting for high break", color=color.orange, style=label.style_label_up, textcolor=color.white, size=size.small)
+            v3JustBrokeLow := true
     else if v3BrokenSide == "high" and close < rangeLow
         tradedV3Today := true
         strategy.entry("Short V3", strategy.short, qty=qty)
@@ -143,6 +154,12 @@ if canWatchV3
         tradedV3Today := true
         strategy.entry("Long V3", strategy.long, qty=qty)
         strategy.exit("Long V3 Exit", "Long V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+
+if showDebugLabels and v3JustBrokeHigh
+    label.new(bar_index, high, "V3: high broken\nwaiting for low break", color=color.blue, style=label.style_label_down, textcolor=color.white, size=size.small)
+
+if showDebugLabels and v3JustBrokeLow
+    label.new(bar_index, low, "V3: low broken\nwaiting for high break", color=color.orange, style=label.style_label_up, textcolor=color.white, size=size.small)
 
 // --- Entry / TP / SL lines + shaded zones for the active trade ---
 var line     entryLine = na
