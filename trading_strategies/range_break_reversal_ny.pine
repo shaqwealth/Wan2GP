@@ -10,6 +10,8 @@
 //      the direction of the second (reversal) breakout.
 //   4. Fixed stop-loss and take-profit, both expressed in ticks
 //      (syminfo.mintick), default 450 ticks each.
+//   5. No new entries after 11:00 (session timezone) by default;
+//      trades already open keep running to their TP/SL.
 //
 // Import this file's content into a new Pine script on TradingView
 // (Pine Editor > New > paste), or drag-and-drop the .pine file if your
@@ -26,6 +28,8 @@ sessionTZ      = input.string("America/New_York", "Session timezone", group="Ran
 tpTicks        = input.int(450, "Take profit (ticks)", minval=1, group="Risk")
 slTicks        = input.int(450, "Stop loss (ticks)", minval=1, group="Risk")
 oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
+cutoffHour     = input.int(11, "No new entries after (hour, session tz)", minval=0, maxval=23, group="Risk")
+cutoffMinute   = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group="Risk")
 showRange      = input.bool(true, "Show range box", group="Display")
 
 tpDist = tpTicks * syminfo.mintick
@@ -67,7 +71,8 @@ if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
         loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=color.gray, extend=extend.right)
 
 // ---------------- Breakout / reversal detection ----------------
-canTrade = not oneTradePerDay or not tradeTakenToday
+beforeCutoff = (hour(time, sessionTZ) * 60 + minute(time, sessionTZ)) < (cutoffHour * 60 + cutoffMinute)
+canTrade = (not oneTradePerDay or not tradeTakenToday) and beforeCutoff
 
 if rangeReady and not inSession
     breakUp   = close > rangeHigh
