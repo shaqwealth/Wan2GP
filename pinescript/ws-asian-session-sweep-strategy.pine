@@ -19,10 +19,8 @@ londonSess = input.session("0300-0930", "London", group = grpSess)
 nySess = input.session("0930-1600", "New York", group = grpSess)
 
 grpHours = "Signal hours filter"
-useHoursFilter = input.bool(true, "Use signal hours filter", group = grpHours,
-     tooltip = "Only take trades and fire alerts inside the signal window")
-signalSess = input.session("0930-1100", "Signal window", group = grpHours,
-     tooltip = "America/New_York — default 9:30 AM to 11:00 AM")
+useHoursFilter = input.bool(true, "Use signal hours filter", group = grpHours, tooltip = "Only take trades and fire alerts inside the signal window")
+signalSess = input.session("0930-1100", "Signal window", group = grpHours, tooltip = "America/New_York — default 9:30 AM to 11:00 AM")
 
 grpVis = "Visual"
 showSessionBg = input.bool(true, "Highlight session backgrounds", group = grpVis)
@@ -34,8 +32,7 @@ showAsianLevels = input.bool(true, "Show Asian high / low during London", group 
 asiaHiCol = input.color(color.new(#f0c040, 0), "Asian range box", group = grpVis)
 
 grpSweep = "Asian sweep (London, same bar)"
-requireBody = input.bool(true, "Require bullish / bearish close", group = grpSweep,
-     tooltip = "Low sweep needs close > open; high sweep needs close < open")
+requireBody = input.bool(true, "Require bullish / bearish close", group = grpSweep, tooltip = "Low sweep needs close > open; high sweep needs close < open")
 lowSweepCol = input.color(color.new(#2ecc71, 0), "Low sweep + reverse up", group = grpSweep)
 highSweepCol = input.color(color.new(#e67e22, 0), "High sweep + reverse down", group = grpSweep)
 
