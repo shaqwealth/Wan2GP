@@ -80,31 +80,26 @@ if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
         loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=color.gray, extend=extend.right)
 
 // ---------------- Asian session high/low (most recently completed) ----------------
-is_newbar(sess) =>
-    t = time("D", sess, sessionTZ)
-    na(t[1]) and not na(t) or t[1] < t
+// Same pattern as the NY range above: time() natively supports sessions
+// that wrap past midnight (e.g. "1700-0400"), so no extra day-boundary
+// helper functions are needed.
+asiaInSession = not na(time(timeframe.period, asiaSessionStr, sessionTZ))
 
-is_session(sess) =>
-    not na(time("D", sess, sessionTZ))
+var float asiaHigh     = na
+var float asiaLow      = na
+var float lastAsiaHigh = na
+var float lastAsiaLow  = na
 
-asiaSessionActive = is_session(asiaSessionStr)
-asiaNewbar = is_newbar(asiaSessionStr)
+if asiaInSession
+    asiaHigh := na(asiaHigh) ? high : math.max(asiaHigh, high)
+    asiaLow  := na(asiaLow)  ? low  : math.min(asiaLow, low)
 
-var float asiaHighAccum = na
-var float asiaLowAccum  = na
-var float lastAsiaHigh  = na
-var float lastAsiaLow   = na
-
-if asiaSessionActive
-    asiaHighAccum := asiaNewbar ? high : math.max(asiaHighAccum, high)
-    asiaLowAccum  := asiaNewbar ? low  : math.min(asiaLowAccum, low)
-
-asiaJustEnded = asiaSessionActive[1] and not asiaSessionActive
-if asiaJustEnded
-    lastAsiaHigh := asiaHighAccum
-    lastAsiaLow := asiaLowAccum
-    asiaHighAccum := na
-    asiaLowAccum := na
+asiaSessionJustEnded = asiaInSession[1] and not asiaInSession
+if asiaSessionJustEnded and not na(asiaHigh) and not na(asiaLow)
+    lastAsiaHigh := asiaHigh
+    lastAsiaLow := asiaLow
+    asiaHigh := na
+    asiaLow := na
 
 plot(showAsiaLevels ? lastAsiaHigh : na, "Asia High", color=color.new(color.orange, 0), style=plot.style_linebr)
 plot(showAsiaLevels ? lastAsiaLow : na, "Asia Low", color=color.new(color.orange, 0), style=plot.style_linebr)
