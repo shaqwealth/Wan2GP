@@ -37,7 +37,7 @@ slDist = slTicks * syminfo.mintick
 
 // ---------------- Session tracking ----------------
 inSession = not na(time(timeframe.period, sessionRange, sessionTZ))
-newDay    = ta.change(time("D", sessionTZ))
+newDay    = ta.change(time("D", sessionTZ)) != 0
 
 var float rangeHigh      = na
 var float rangeLow       = na
