@@ -1,0 +1,164 @@
+//@version=6
+strategy("ws-Asian Session Sweep Strategy", shorttitle = "Asian Sweep Strategy", overlay = true,
+     max_labels_count = 500, default_qty_type = strategy.fixed, default_qty_value = 1,
+     pyramiding = 0, calc_on_every_tick = false)
+
+// Sessions (America/New_York)
+// Asian  20:30 → 03:00 | London 03:00 → 09:30
+//
+// Same-bar sweep + reverse (during London / signal window):
+//   Low sweep  : wick below Asian low (locked at 03:00), close reclaims above it (reversal up)  -> LONG
+//   High sweep : wick above Asian high (locked at 03:00), close reclaims below it (reversal down) -> SHORT
+//
+// SL/TP are custom, expressed in ticks (default 450 ticks) and applied from the entry price.
+
+grpTz = "Timezone"
+tz = input.string("America/New_York", "Timezone", group = grpTz)
+
+grpSess = "Sessions"
+asiaSess = input.session("2030-0300", "Asian", group = grpSess)
+londonSess = input.session("0300-0930", "London", group = grpSess)
+nySess = input.session("0930-1600", "New York", group = grpSess)
+
+grpHours = "Signal hours filter"
+useHoursFilter = input.bool(true, "Use signal hours filter", group = grpHours,
+     tooltip = "Only take trades and fire alerts inside the signal window")
+signalSess = input.session("0930-1100", "Signal window", group = grpHours,
+     tooltip = "America/New_York — default 9:30 AM to 11:00 AM")
+
+grpVis = "Visual"
+showSessionBg = input.bool(true, "Highlight session backgrounds", group = grpVis)
+asiaBgCol = input.color(color.new(#f0c040, 92), "Asian background", group = grpVis)
+londonBgCol = input.color(color.new(#4a90d9, 92), "London background", group = grpVis)
+nyBgCol = input.color(color.new(#9b59b6, 94), "New York background", group = grpVis)
+
+showAsianLevels = input.bool(true, "Show Asian high / low during London", group = grpVis)
+asiaHiCol = input.color(color.new(#f0c040, 0), "Asian high line", group = grpVis)
+asiaLoCol = input.color(color.new(#f0c040, 0), "Asian low line", group = grpVis)
+
+grpSweep = "Asian sweep (London, same bar)"
+requireBody = input.bool(true, "Require bullish / bearish close", group = grpSweep,
+     tooltip = "Low sweep needs close > open; high sweep needs close < open")
+lowSweepCol = input.color(color.new(#2ecc71, 0), "Low sweep + reverse up", group = grpSweep)
+highSweepCol = input.color(color.new(#e67e22, 0), "High sweep + reverse down", group = grpSweep)
+
+grpRisk = "Risk management"
+useSL = input.bool(true, "Use Stop Loss", group = grpRisk)
+slTicks = input.int(450, "Stop Loss (ticks)", minval = 1, group = grpRisk)
+useTP = input.bool(true, "Use Take Profit", group = grpRisk)
+tpTicks = input.int(450, "Take Profit (ticks)", minval = 1, group = grpRisk)
+allowLong = input.bool(true, "Allow long trades (low sweep)", group = grpRisk)
+allowShort = input.bool(true, "Allow short trades (high sweep)", group = grpRisk)
+
+// ─── Sessions ────────────────────────────────────────────────────────────────
+inAsia = not na(time(timeframe.period, asiaSess + ":1234567", tz))
+inLondon = not na(time(timeframe.period, londonSess + ":1234567", tz))
+inNY = not na(time(timeframe.period, nySess + ":1234567", tz))
+londonJustStarted = inLondon and not inLondon[1]
+asiaJustStarted = inAsia and not inAsia[1]
+
+inSignalHours = not na(time(timeframe.period, signalSess + ":1234567", tz))
+allowSignal = not useHoursFilter or inSignalHours
+
+bullBody = close > open
+bearBody = close < open
+
+// ─── Asian range (locked at 03:00) ───────────────────────────────────────────
+var float asianHi = na
+var float asianLo = na
+var float lockedAsianHi = na
+var float lockedAsianLo = na
+
+// Asian session crosses midnight — do NOT reset asianHi/Lo on calendar newDay
+
+// Fresh Asian range each evening at 20:30 (full 20:30 → 03:00 window)
+if asiaJustStarted
+    asianHi := na
+    asianLo := na
+
+if inAsia
+    if na(asianHi)
+        asianHi := high
+        asianLo := low
+    else
+        asianHi := math.max(asianHi, high)
+        asianLo := math.min(asianLo, low)
+
+if londonJustStarted and not na(asianHi)
+    lockedAsianHi := asianHi
+    lockedAsianLo := asianLo
+
+hasAsianInLondon = inLondon and not na(lockedAsianHi)
+showAsianLevelsNow = showAsianLevels and not na(lockedAsianHi) and (hasAsianInLondon or (useHoursFilter and inSignalHours))
+
+// Sweep zone: full London, or signal window when filter is on (covers 9:30–11 NY)
+inSweepZone = useHoursFilter ? inSignalHours : inLondon
+hasAsianForSweep = inSweepZone and not na(lockedAsianHi)
+
+// ─── Same-bar sweep + reverse ────────────────────────────────────────────────
+// Low sweep : wick below Asian low, close reclaims strictly ABOVE the level (reversal up)
+// High sweep: wick above Asian high, close reclaims strictly BELOW the level (reversal down)
+sweptLow = hasAsianForSweep and low < lockedAsianLo
+sweptHigh = hasAsianForSweep and high > lockedAsianHi
+
+reversedFromLow = sweptLow and close > lockedAsianLo
+reversedFromHigh = sweptHigh and close < lockedAsianHi
+
+lowSweepBar = reversedFromLow and (not requireBody or bullBody)
+highSweepBar = reversedFromHigh and (not requireBody or bearBody)
+
+// Outside bar: both sides swept on one candle — pick by close vs Asian mid
+midAsian = hasAsianForSweep ? (lockedAsianHi + lockedAsianLo) * 0.5 : na
+bothSides = lowSweepBar and highSweepBar
+
+paintLowRaw = bothSides ? close >= midAsian : lowSweepBar
+paintHighRaw = bothSides ? close < midAsian : highSweepBar and not paintLowRaw
+
+paintLow = paintLowRaw and allowSignal
+paintHigh = paintHighRaw and allowSignal
+
+candleCol = paintLow ? lowSweepCol : paintHigh ? highSweepCol : na
+barcolor(candleCol)
+
+// ─── Backgrounds & levels ────────────────────────────────────────────────────
+bgcolor(showSessionBg and inAsia ? asiaBgCol : na, title = "Asian session")
+bgcolor(showSessionBg and inLondon ? londonBgCol : na, title = "London session")
+bgcolor(showSessionBg and inNY ? nyBgCol : na, title = "New York session")
+
+plot(showAsianLevelsNow ? lockedAsianHi : na, "Asian High", asiaHiCol, 2, plot.style_linebr)
+plot(showAsianLevelsNow ? lockedAsianLo : na, "Asian Low", asiaLoCol, 2, plot.style_linebr)
+
+plotshape(paintLow, "Asian low sweep (London)", shape.triangleup, location.belowbar, lowSweepCol, size = size.tiny)
+plotshape(paintHigh, "Asian high sweep (London)", shape.triangledown, location.abovebar, highSweepCol, size = size.tiny)
+
+alertcondition(paintLow, "Asian low sweep (London)", "London: swept Asian low, closed back above")
+alertcondition(paintHigh, "Asian high sweep (London)", "London: swept Asian high, closed back below")
+
+// ─── Strategy orders ─────────────────────────────────────────────────────────
+longCondition = paintLow and allowLong and strategy.position_size <= 0
+shortCondition = paintHigh and allowShort and strategy.position_size >= 0
+
+if longCondition
+    strategy.entry("Long", strategy.long)
+
+if shortCondition
+    strategy.entry("Short", strategy.short)
+
+// SL/TP distances in ticks, converted to price offsets from the average entry price
+slOffset = slTicks * syminfo.mintick
+tpOffset = tpTicks * syminfo.mintick
+
+longStopPrice = strategy.position_avg_price - slOffset
+longTpPrice = strategy.position_avg_price + tpOffset
+shortStopPrice = strategy.position_avg_price + slOffset
+shortTpPrice = strategy.position_avg_price - tpOffset
+
+if strategy.position_size > 0
+    strategy.exit("Long Exit", "Long",
+         stop = useSL ? longStopPrice : na,
+         limit = useTP ? longTpPrice : na)
+
+if strategy.position_size < 0
+    strategy.exit("Short Exit", "Short",
+         stop = useSL ? shortStopPrice : na,
+         limit = useTP ? shortTpPrice : na)
