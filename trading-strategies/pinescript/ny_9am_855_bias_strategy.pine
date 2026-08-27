@@ -10,10 +10,11 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // (first bearish close to go short after a failed long, first bullish
 // close to go long after a failed short). A Doji (tiny body relative to
 // its range) never counts as confirmation; the wait continues.
-// Trade V3 (optional, independent of V1/V2): once today's trade (V1,
-// plus its V2 follow-up if any) has fully exited, watches for the first
-// candle outside the 8-9 AM window whose size is >= a custom tick
-// threshold (default 240) and takes one trade in that candle's direction.
+// Trade V3 (optional, independent of V1/V2): builds the 8:00-9:00 AM
+// opening range. The first candle body that closes beyond one side of
+// the range marks that side as broken (invalidated). Once a side is
+// broken, the trade is taken only when a later candle body closes
+// beyond the OPPOSITE side.
 // Run this strategy on the 5-minute chart.
 
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
@@ -22,9 +23,7 @@ qty       = input.float(1, "Order size", minval=0.01, group="Order")
 
 enableV2       = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
 dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (Doji filter)", minval=0, maxval=100, group="Strategy") / 100
-enableV3       = input.bool(false, "Trade V3: big candle after today's trade exits", group="Strategy")
-v3Measure      = input.string("Range (High-Low)", "V3 candle measure", options=["Range (High-Low)", "Body (|Close-Open|)"], group="Strategy")
-v3Ticks        = input.int(240, "V3 candle size threshold (ticks)", minval=1, group="Strategy")
+enableV3       = input.bool(false, "Trade V3: opposite-side break of the 8-9am range", group="Strategy")
 
 enableHighlight  = input.bool(true, "Highlight big candles", group="Highlight")
 bigCandleMeasure = input.string("Range (High-Low)", "Measure", options=["Range (High-Low)", "Body (|Close-Open|)"], group="Highlight")
@@ -57,7 +56,10 @@ var bool  v2Pending     = false
 var float v2PendingDir  = na
 var float lastTradeDir  = na
 var int   lastDay = na
-var bool  tradedV3Today = false
+var bool   tradedV3Today = false
+var string v3BrokenSide  = na
+var float  rangeHigh     = na
+var float  rangeLow      = na
 
 if na(lastDay) or nyDay != lastDay
     lastDay := nyDay
@@ -65,6 +67,17 @@ if na(lastDay) or nyDay != lastDay
     v2Used := false
     v2Pending := false
     tradedV3Today := false
+    v3BrokenSide := na
+    rangeHigh := na
+    rangeLow := na
+
+// --- Trade V3: build the 8:00-9:00 AM opening range ---
+if enableV3 and nyHour == 8
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow, low)
+
+plot(enableV3 and not na(rangeHigh) ? rangeHigh : na, color=color.blue,   style=plot.style_line, title="8-9am Range High")
+plot(enableV3 and not na(rangeLow)  ? rangeLow  : na, color=color.orange, style=plot.style_line, title="8-9am Range Low")
 
 if is0855Bar and not tradedToday
     tradedToday := true
@@ -112,22 +125,23 @@ if v2Pending
         strategy.exit("Long V2 Exit", "Long V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         lastTradeDir := 1.0
 
-// --- Trade V3: big candle after today's trade has fully exited ---
-todaysTradeDone    = tradedToday and strategy.position_size == 0 and not v2Pending
-outsideOpeningHour = nyHour != 8
-v3CandleSize       = v3Measure == "Range (High-Low)" ? high - low : math.abs(close - open)
-v3CandleTicks      = v3CandleSize / syminfo.mintick
-v3BigCandle        = v3CandleTicks >= v3Ticks
+// --- Trade V3: trade the opposite-side break, once one side is already broken ---
+canWatchV3 = enableV3 and nyHour != 8 and not na(rangeHigh) and not na(rangeLow) and not tradedV3Today
 
-if enableV3 and todaysTradeDone and outsideOpeningHour and not tradedV3Today and v3BigCandle
-    if close > open
-        tradedV3Today := true
-        strategy.entry("Long V3", strategy.long, qty=qty)
-        strategy.exit("Long V3 Exit", "Long V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
-    else if close < open
+if canWatchV3
+    if na(v3BrokenSide)
+        if close > rangeHigh
+            v3BrokenSide := "high"
+        else if close < rangeLow
+            v3BrokenSide := "low"
+    else if v3BrokenSide == "high" and close < rangeLow
         tradedV3Today := true
         strategy.entry("Short V3", strategy.short, qty=qty)
         strategy.exit("Short V3 Exit", "Short V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+    else if v3BrokenSide == "low" and close > rangeHigh
+        tradedV3Today := true
+        strategy.entry("Long V3", strategy.long, qty=qty)
+        strategy.exit("Long V3 Exit", "Long V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
 
 // --- Entry / TP / SL lines + shaded zones for the active trade ---
 var line     entryLine = na
