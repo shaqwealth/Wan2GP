@@ -31,8 +31,7 @@ londonBgCol = input.color(color.new(#4a90d9, 92), "London background", group = g
 nyBgCol = input.color(color.new(#9b59b6, 94), "New York background", group = grpVis)
 
 showAsianLevels = input.bool(true, "Show Asian high / low during London", group = grpVis)
-asiaHiCol = input.color(color.new(#f0c040, 0), "Asian high line", group = grpVis)
-asiaLoCol = input.color(color.new(#f0c040, 0), "Asian low line", group = grpVis)
+asiaHiCol = input.color(color.new(#f0c040, 0), "Asian range box", group = grpVis)
 
 grpSweep = "Asian sweep (London, same bar)"
 requireBody = input.bool(true, "Require bullish / bearish close", group = grpSweep,
@@ -66,6 +65,7 @@ var float asianHi = na
 var float asianLo = na
 var float lockedAsianHi = na
 var float lockedAsianLo = na
+var box asianRangeBox = na
 
 // Asian session crosses midnight — do NOT reset asianHi/Lo on calendar newDay
 
@@ -73,6 +73,8 @@ var float lockedAsianLo = na
 if asiaJustStarted
     asianHi := na
     asianLo := na
+    box.delete(asianRangeBox)
+    asianRangeBox := showAsianLevels ? box.new(left = bar_index, top = high, right = bar_index, bottom = low, border_color = asiaHiCol, border_width = 1, bgcolor = color.new(asiaHiCol, 90), extend = extend.none, xloc = xloc.bar_index) : na
 
 if inAsia
     if na(asianHi)
@@ -81,6 +83,10 @@ if inAsia
     else
         asianHi := math.max(asianHi, high)
         asianLo := math.min(asianLo, low)
+    if not na(asianRangeBox)
+        box.set_top(asianRangeBox, asianHi)
+        box.set_bottom(asianRangeBox, asianLo)
+        box.set_right(asianRangeBox, bar_index)
 
 if londonJustStarted and not na(asianHi)
     lockedAsianHi := asianHi
@@ -88,6 +94,11 @@ if londonJustStarted and not na(asianHi)
 
 hasAsianInLondon = inLondon and not na(lockedAsianHi)
 showAsianLevelsNow = showAsianLevels and not na(lockedAsianHi) and (hasAsianInLondon or (useHoursFilter and inSignalHours))
+
+// Keep the locked range box anchored to the current bar for as long as the level is shown
+// (bar-index anchored on both edges, so it can never drift away from the session candles)
+if showAsianLevelsNow and not na(asianRangeBox)
+    box.set_right(asianRangeBox, bar_index)
 
 // Sweep zone: full London, or signal window when filter is on (covers 9:30–11 NY)
 inSweepZone = useHoursFilter ? inSignalHours : inLondon
@@ -122,9 +133,6 @@ barcolor(candleCol)
 bgcolor(showSessionBg and inAsia ? asiaBgCol : na, title = "Asian session")
 bgcolor(showSessionBg and inLondon ? londonBgCol : na, title = "London session")
 bgcolor(showSessionBg and inNY ? nyBgCol : na, title = "New York session")
-
-plot(showAsianLevelsNow ? lockedAsianHi : na, "Asian High", asiaHiCol, 2, plot.style_linebr)
-plot(showAsianLevelsNow ? lockedAsianLo : na, "Asian Low", asiaLoCol, 2, plot.style_linebr)
 
 plotshape(paintLow, "Asian low sweep (London)", shape.triangleup, location.belowbar, lowSweepCol, size = size.tiny)
 plotshape(paintHigh, "Asian high sweep (London)", shape.triangledown, location.abovebar, highSweepCol, size = size.tiny)
