@@ -1,0 +1,109 @@
+// Range Break Reversal (8-9AM America/New_York)
+//
+// Logic:
+//   1. Build a range from the high/low printed during the 08:00-09:00
+//      America/New_York session.
+//   2. After the range closes, wait for the first breakout (close beyond
+//      the range high OR the range low).
+//   3. If price then breaks back through the OPPOSITE side of the range,
+//      treat the first breakout as a fakeout/liquidity sweep and enter in
+//      the direction of the second (reversal) breakout.
+//   4. Fixed stop-loss and take-profit, both expressed in ticks
+//      (syminfo.mintick), default 450 ticks each.
+//
+// Import this file's content into a new Pine script on TradingView
+// (Pine Editor > New > paste), or drag-and-drop the .pine file if your
+// setup supports it, then add the strategy to a chart.
+
+//@version=5
+strategy("Range Break Reversal (8-9AM NY)", overlay=true,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     initial_capital=100000, currency=currency.USD)
+
+// ---------------- Inputs ----------------
+sessionRange   = input.session("0800-0900", "Range session", group="Range")
+sessionTZ      = input.string("America/New_York", "Session timezone", group="Range")
+tpTicks        = input.int(450, "Take profit (ticks)", minval=1, group="Risk")
+slTicks        = input.int(450, "Stop loss (ticks)", minval=1, group="Risk")
+oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
+showRange      = input.bool(true, "Show range box", group="Display")
+
+tpDist = tpTicks * syminfo.mintick
+slDist = slTicks * syminfo.mintick
+
+// ---------------- Session tracking ----------------
+inSession = not na(time(timeframe.period, sessionRange, sessionTZ))
+newDay    = ta.change(time("D", sessionTZ))
+
+var float rangeHigh      = na
+var float rangeLow       = na
+var bool  rangeReady     = false
+var bool  firstBreakUp   = false
+var bool  firstBreakDown = false
+var bool  tradeTakenToday = false
+var box   rangeBox = na
+var line  hiLine   = na
+var line  loLine   = na
+
+if newDay
+    rangeHigh := na
+    rangeLow := na
+    rangeReady := false
+    firstBreakUp := false
+    firstBreakDown := false
+    tradeTakenToday := false
+
+if inSession
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow, low)
+
+sessionJustEnded = inSession[1] and not inSession
+if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
+    rangeReady := true
+    if showRange
+        rangeBox := box.new(bar_index, rangeHigh, bar_index, rangeLow,
+             border_color=color.gray, bgcolor=color.new(color.gray, 90), extend=extend.right)
+        hiLine := line.new(bar_index, rangeHigh, bar_index, rangeHigh, color=color.gray, extend=extend.right)
+        loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=color.gray, extend=extend.right)
+
+// ---------------- Breakout / reversal detection ----------------
+canTrade = not oneTradePerDay or not tradeTakenToday
+
+if rangeReady and not inSession
+    breakUp   = close > rangeHigh
+    breakDown = close < rangeLow
+
+    if not firstBreakUp and not firstBreakDown
+        if breakUp
+            firstBreakUp := true
+        else if breakDown
+            firstBreakDown := true
+
+    longCond  = firstBreakDown and breakUp   and canTrade
+    shortCond = firstBreakUp   and breakDown and canTrade
+
+    if longCond
+        strategy.entry("Long", strategy.long)
+        tradeTakenToday := true
+        firstBreakDown := false
+        firstBreakUp := true
+
+    if shortCond
+        strategy.entry("Short", strategy.short)
+        tradeTakenToday := true
+        firstBreakUp := false
+        firstBreakDown := true
+
+// ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
+if strategy.position_size > 0
+    strategy.exit("Long Exit", "Long",
+         limit=strategy.position_avg_price + tpDist,
+         stop=strategy.position_avg_price - slDist)
+
+if strategy.position_size < 0
+    strategy.exit("Short Exit", "Short",
+         limit=strategy.position_avg_price - tpDist,
+         stop=strategy.position_avg_price + slDist)
+
+plot(rangeReady ? rangeHigh : na, "Range High", color=color.new(color.gray, 0), style=plot.style_linebr)
+plot(rangeReady ? rangeLow : na, "Range Low", color=color.new(color.gray, 0), style=plot.style_linebr)
