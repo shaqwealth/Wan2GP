@@ -4,9 +4,11 @@ strategy("ws-Asian Session Sweep Strategy", shorttitle = "Asian Sweep Strategy",
 // Sessions (America/New_York)
 // Asian  20:30 → 03:00 | London 03:00 → 09:30
 //
-// Same-bar sweep + reverse (during London / signal window):
-//   Low sweep  : wick below Asian low (locked at 03:00), close reclaims above it (reversal up)  -> LONG
-//   High sweep : wick above Asian high (locked at 03:00), close reclaims below it (reversal down) -> SHORT
+// Break, then reclaim — break and reclaim can happen on the same bar or on
+// different bars, but a reclaim with no prior break never fires a signal
+// (during London / signal window):
+//   Low break  : wick below Asian low (locked at 03:00), a later close reclaims above it (reversal up)  -> LONG
+//   High break : wick above Asian high (locked at 03:00), a later close reclaims below it (reversal down) -> SHORT
 //
 // SL/TP are custom, expressed in ticks (default 450 ticks) and applied from the entry price.
 
@@ -101,19 +103,30 @@ if showAsianLevelsNow and not na(asianRangeBox)
 inSweepZone = useHoursFilter ? inSignalHours : inLondon
 hasAsianForSweep = inSweepZone and not na(lockedAsianHi)
 
-// ─── Same-bar sweep + reverse ────────────────────────────────────────────────
-// Low sweep : wick below Asian low, close reclaims strictly ABOVE the level (reversal up)
-// High sweep: wick above Asian high, close reclaims strictly BELOW the level (reversal down)
-sweptLow = hasAsianForSweep and low < lockedAsianLo
-sweptHigh = hasAsianForSweep and high > lockedAsianHi
+// ─── Break, then reclaim (break and reclaim can be on different bars) ────────
+// A signal needs a genuine break (wick beyond the Asian level) followed by a
+// close back on the other side — never a reclaim on its own with no break.
+var bool lowBroken = false
+var bool highBroken = false
 
-reversedFromLow = sweptLow and close > lockedAsianLo
-reversedFromHigh = sweptHigh and close < lockedAsianHi
+if londonJustStarted
+    lowBroken := false
+    highBroken := false
 
-lowSweepBar = reversedFromLow and (not requireBody or bullBody)
-highSweepBar = reversedFromHigh and (not requireBody or bearBody)
+if hasAsianForSweep and low < lockedAsianLo
+    lowBroken := true
+if hasAsianForSweep and high > lockedAsianHi
+    highBroken := true
 
-// Outside bar: both sides swept on one candle — pick by close vs Asian mid
+// Low break : wick below Asian low at some point, close reclaims strictly ABOVE the level (reversal up)
+// High break: wick above Asian high at some point, close reclaims strictly BELOW the level (reversal down)
+lowReclaim = hasAsianForSweep and lowBroken and close > lockedAsianLo
+highReclaim = hasAsianForSweep and highBroken and close < lockedAsianHi
+
+lowSweepBar = lowReclaim and (not requireBody or bullBody)
+highSweepBar = highReclaim and (not requireBody or bearBody)
+
+// Outside bar: both sides broken and reclaimed on one candle — pick by close vs Asian mid
 midAsian = hasAsianForSweep ? (lockedAsianHi + lockedAsianLo) * 0.5 : na
 bothSides = lowSweepBar and highSweepBar
 
@@ -122,6 +135,12 @@ paintHighRaw = bothSides ? close < midAsian : highSweepBar and not paintLowRaw
 
 paintLow = paintLowRaw and allowSignal
 paintHigh = paintHighRaw and allowSignal
+
+// Consume the break once it has produced a signal — the next signal needs a fresh break
+if paintLow
+    lowBroken := false
+if paintHigh
+    highBroken := false
 
 candleCol = paintLow ? lowSweepCol : paintHigh ? highSweepCol : na
 barcolor(candleCol)
