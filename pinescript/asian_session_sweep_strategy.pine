@@ -187,6 +187,10 @@ isNewLong = strategy.position_size > 0 and strategy.position_size[1] <= 0
 isNewShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
 isNewEntry = isNewLong or isNewShort
 
+entryPrice = strategy.position_avg_price
+tpPrice = isNewLong ? longTpPrice : shortTpPrice
+slPrice = isNewLong ? longStopPrice : shortStopPrice
+
 if isNewEntry
     line.delete(entryLine)
     line.delete(tpLine)
@@ -199,27 +203,26 @@ if isNewEntry
     tpZoneFill := na
     slZoneFill := na
 
-    entryPrice = strategy.position_avg_price
-    tpPrice = isNewLong ? longTpPrice : shortTpPrice
-    slPrice = isNewLong ? longStopPrice : shortStopPrice
+if isNewEntry and showTradeLines
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color = entryLineColor, width = entryLineWidth, style = lineStyle)
 
-    if showTradeLines
-        entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color = entryLineColor, width = entryLineWidth, style = lineStyle)
-        if useTP
-            tpLine := line.new(bar_index, tpPrice, bar_index, tpPrice, color = tpLineColor, width = tpLineWidth, style = lineStyle)
-        if useSL
-            slLine := line.new(bar_index, slPrice, bar_index, slPrice, color = slLineColor, width = slLineWidth, style = lineStyle)
+if isNewEntry and showTradeLines and useTP
+    tpLine := line.new(bar_index, tpPrice, bar_index, tpPrice, color = tpLineColor, width = tpLineWidth, style = lineStyle)
 
-        if showZones
-            if not na(tpLine)
-                tpZoneFill := linefill.new(entryLine, tpLine, tpZoneColor)
-            if not na(slLine)
-                slZoneFill := linefill.new(entryLine, slLine, slZoneColor)
+if isNewEntry and showTradeLines and useSL
+    slLine := line.new(bar_index, slPrice, bar_index, slPrice, color = slLineColor, width = slLineWidth, style = lineStyle)
 
-if strategy.position_size != 0
-    if not na(entryLine)
-        line.set_x2(entryLine, bar_index)
-    if not na(tpLine)
-        line.set_x2(tpLine, bar_index)
-    if not na(slLine)
-        line.set_x2(slLine, bar_index)
+if isNewEntry and showTradeLines and showZones and useTP
+    tpZoneFill := linefill.new(entryLine, tpLine, tpZoneColor)
+
+if isNewEntry and showTradeLines and showZones and useSL
+    slZoneFill := linefill.new(entryLine, slLine, slZoneColor)
+
+if strategy.position_size != 0 and not na(entryLine)
+    line.set_x2(entryLine, bar_index)
+
+if strategy.position_size != 0 and not na(tpLine)
+    line.set_x2(tpLine, bar_index)
+
+if strategy.position_size != 0 and not na(slLine)
+    line.set_x2(slLine, bar_index)
