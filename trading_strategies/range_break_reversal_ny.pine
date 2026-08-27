@@ -13,8 +13,10 @@
 //      candle is too small (e.g. its wick is only 140 ticks away), the
 //      stop is pushed out to the minimum (e.g. 200 ticks) instead.
 //   5. Take-profit is the high (long) / low (short) of the most recently
-//      completed Asian session. A trade is skipped if that level has
-//      already been passed, since it would no longer be a valid target.
+//      completed Asian session. A trade is skipped only until that
+//      session has produced a level (e.g. very first day of history);
+//      if price has already passed the level by entry time, the exit
+//      order closes the position at the next available price.
 //   6. No new entries after 11:00 (session timezone) by default; trades
 //      already open keep running to their TP/SL.
 //
@@ -121,8 +123,8 @@ if rangeReady and not inSession
         else if breakDown
             firstBreakDown := true
 
-    validLongTarget  = not na(lastAsiaHigh) and lastAsiaHigh > close
-    validShortTarget = not na(lastAsiaLow)  and lastAsiaLow  < close
+    validLongTarget  = not na(lastAsiaHigh)
+    validShortTarget = not na(lastAsiaLow)
 
     longCond  = firstBreakDown and breakUp   and canTrade and validLongTarget
     shortCond = firstBreakUp   and breakDown and canTrade and validShortTarget
