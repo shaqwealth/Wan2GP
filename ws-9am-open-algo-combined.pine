@@ -1,0 +1,204 @@
+//@version=6
+strategy("ws-9AM open algo (Combined V1+V3)", overlay=true,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     initial_capital=100000, currency=currency.USD,
+     calc_on_every_tick=false, pyramiding=0, max_lines_count=500)
+// Combines the two entry engines under one strategy, selectable via the
+// "Entry method" input:
+//
+//  - "Candle Direction": enters once per day at the NY 8:55 AM (5-minute
+//    candle) direction: bullish -> long, bearish -> short. If the 8:55
+//    candle is flat, the 8:50 candle is used as the reference instead.
+//    (this is the original ws-9AM open algo entry)
+//
+//  - "Range Breakout (V3)": builds an opening-range box from `sessionRange`
+//    (default 08:00-09:00 NY), then enters on the first *reversal*
+//    breakout once the range has closed: if price first breaks the range
+//    one way and later closes back through the opposite side, that's the
+//    trade signal (this is the V3 entry).
+//
+// Both engines share the same risk management:
+//  - Fixed TP/SL in ticks off the average fill.
+//  - One trade per day (optional) + a cutoff time after which no new
+//    entries are taken.
+//  - Trade V2 (optional): if the day's first trade is stopped out, one
+//    reversal trade is taken with the same TP/SL, once the first
+//    confirming candle closes (first bearish close to go short after a
+//    failed long, first bullish close to go long after a failed short).
+//    A Doji (tiny body relative to its range) never counts as
+//    confirmation; the wait continues.
+//
+// Run this strategy on the 5-minute chart.
+
+// ---------------- Inputs ----------------
+entryMethod    = input.string("Candle Direction", "Entry method",
+     options=["Candle Direction", "Range Breakout (V3)"], group="Entry")
+tz             = input.string("America/New_York", "Timezone", group="Entry")
+sessionRange   = input.session("0800-0900", "Range session (Range Breakout mode)", group="Entry")
+showRange      = input.bool(true, "Show range box (Range Breakout mode)", group="Entry")
+
+tpTicks        = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
+slTicks        = input.int(200, "Stop Loss (ticks)",   minval=1, group="Risk")
+qty            = input.float(1, "Order size", minval=0.01, group="Risk")
+oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
+cutoffHour     = input.int(11, "No new entries after (hour, session tz)", minval=0, maxval=23, group="Risk")
+cutoffMinute   = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group="Risk")
+
+enableV2       = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
+dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (Doji filter)", minval=0, maxval=100, group="Strategy") / 100
+
+showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
+entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
+tpColor     = input.color(color.green,                 "TP line color",     group="Display")
+slColor     = input.color(color.red,                   "SL line color",     group="Display")
+tpZoneColor = input.color(color.new(color.green, 85),   "Entry->TP zone color", group="Display")
+slZoneColor = input.color(color.new(color.red, 85),     "Entry->SL zone color", group="Display")
+lineWidth   = input.int(1, "Line width", minval=1, maxval=4, group="Display")
+lineStyleIn = input.string("Dashed", "TP/SL line style", options=["Solid", "Dashed", "Dotted"], group="Display")
+lineStyle = lineStyleIn == "Solid" ? line.style_solid : lineStyleIn == "Dotted" ? line.style_dotted : line.style_dashed
+
+// ---------------- Day / session state ----------------
+nyHour   = hour(time, tz)
+nyMinute = minute(time, tz)
+is0855Bar = nyHour == 8 and nyMinute == 55
+
+var bool  tradedToday   = false
+var bool  v2Used        = false
+var bool  v2Pending     = false
+var float v2PendingDir  = na
+var float lastTradeDir  = na
+
+var float rangeHigh      = na
+var float rangeLow       = na
+var bool  rangeReady     = false
+var bool  firstBreakUp   = false
+var bool  firstBreakDown = false
+var box   rangeBox = na
+var line  hiLine   = na
+var line  loLine   = na
+
+newDay = ta.change(time("D", tz)) != 0
+if newDay
+    tradedToday := false
+    v2Used := false
+    v2Pending := false
+    rangeHigh := na
+    rangeLow := na
+    rangeReady := false
+    firstBreakUp := false
+    firstBreakDown := false
+
+inSession = not na(time(timeframe.period, sessionRange, tz))
+if inSession
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow, low)
+
+sessionJustEnded = inSession[1] and not inSession
+if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
+    rangeReady := true
+    if showRange
+        rangeBox := box.new(bar_index, rangeHigh, bar_index, rangeLow,
+             border_color=color.gray, bgcolor=color.new(color.gray, 90), extend=extend.right)
+        hiLine := line.new(bar_index, rangeHigh, bar_index, rangeHigh, color=color.gray, extend=extend.right)
+        loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=color.gray, extend=extend.right)
+
+beforeCutoff = (nyHour * 60 + nyMinute) < (cutoffHour * 60 + cutoffMinute)
+canTrade = (not oneTradePerDay or not tradedToday) and beforeCutoff
+
+// ---------------- Entry engine 1: Candle Direction (original) ----------------
+if entryMethod == "Candle Direction" and is0855Bar and canTrade
+    tradedToday := true
+    bool bullish = close > open
+    bool bearish = close < open
+    if not bullish and not bearish
+        // 8:55 candle is flat -> fall back to the 8:50 candle
+        bullish := close[1] > open[1]
+        bearish := close[1] < open[1]
+    if bullish
+        strategy.entry("Long", strategy.long, qty=qty)
+        strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := 1.0
+    else if bearish
+        strategy.entry("Short", strategy.short, qty=qty)
+        strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := -1.0
+
+// ---------------- Entry engine 2: Range Breakout (V3) ----------------
+if entryMethod == "Range Breakout (V3)" and rangeReady and not inSession
+    breakUp   = close > rangeHigh
+    breakDown = close < rangeLow
+    if not firstBreakUp and not firstBreakDown
+        if breakUp
+            firstBreakUp := true
+        else if breakDown
+            firstBreakDown := true
+    longCond  = firstBreakDown and breakUp   and canTrade
+    shortCond = firstBreakUp   and breakDown and canTrade
+    if longCond
+        strategy.entry("Long", strategy.long, qty=qty)
+        strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        tradedToday := true
+        lastTradeDir := 1.0
+        firstBreakDown := false
+        firstBreakUp := true
+    if shortCond
+        strategy.entry("Short", strategy.short, qty=qty)
+        strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        tradedToday := true
+        lastTradeDir := -1.0
+        firstBreakUp := false
+        firstBreakDown := true
+
+// ---------------- Trade V2: reverse once if the current trade was stopped out ----------------
+// On stop-out, wait for the first confirming candle before reversing:
+// first bearish close to go short after a failed long, first bullish
+// close to go long after a failed short.
+justExited = strategy.position_size == 0 and strategy.position_size[1] != 0
+if enableV2 and justExited and not v2Used and strategy.closedtrades > 0
+    if strategy.closedtrades.exit_comment(strategy.closedtrades - 1) == "SL"
+        v2Used := true
+        v2Pending := true
+        v2PendingDir := lastTradeDir == 1.0 ? -1.0 : 1.0
+if v2Pending
+    float candleRange = high - low
+    bool  isDoji        = candleRange > 0 and (math.abs(close - open) / candleRange) <= dojiMaxBodyPct
+    bool  candleBullish = close > open and not isDoji
+    bool  candleBearish = close < open and not isDoji
+    if v2PendingDir == -1.0 and candleBearish
+        v2Pending := false
+        strategy.entry("Short V2", strategy.short, qty=qty)
+        strategy.exit("Short V2 Exit", "Short V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := -1.0
+    else if v2PendingDir == 1.0 and candleBullish
+        v2Pending := false
+        strategy.entry("Long V2", strategy.long, qty=qty)
+        strategy.exit("Long V2 Exit", "Long V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        lastTradeDir := 1.0
+
+// ---------------- Entry / TP / SL lines + shaded zones for the active trade ----------------
+var line     entryLine = na
+var line     tpLine    = na
+var line     slLine    = na
+var linefill tpFill    = na
+var linefill slFill    = na
+posSizePrev = strategy.position_size[1]
+justEntered = strategy.position_size != 0 and (posSizePrev == 0 or math.sign(strategy.position_size) != math.sign(posSizePrev))
+inTrade     = strategy.position_size != 0
+if showLines and justEntered
+    float entryPrice = strategy.position_avg_price
+    float dir        = strategy.position_size > 0 ? 1.0 : -1.0
+    float tpPrice    = entryPrice + dir * tpTicks * syminfo.mintick
+    float slPrice    = entryPrice - dir * slTicks * syminfo.mintick
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=entryColor, width=lineWidth, style=line.style_solid)
+    tpLine    := line.new(bar_index, tpPrice,    bar_index, tpPrice,    color=tpColor,    width=lineWidth, style=lineStyle)
+    slLine    := line.new(bar_index, slPrice,    bar_index, slPrice,    color=slColor,    width=lineWidth, style=lineStyle)
+    tpFill := linefill.new(entryLine, tpLine, color=tpZoneColor)
+    slFill := linefill.new(entryLine, slLine, color=slZoneColor)
+if showLines and inTrade and not na(entryLine)
+    line.set_x2(entryLine, bar_index)
+    line.set_x2(tpLine, bar_index)
+    line.set_x2(slLine, bar_index)
+
+// ---------------- Range plots (Range Breakout mode reference) ----------------
+plot(rangeReady ? rangeHigh : na, "Range High", color=color.new(color.gray, 0), style=plot.style_linebr)
+plot(rangeReady ? rangeLow : na, "Range Low", color=color.new(color.gray, 0), style=plot.style_linebr)
