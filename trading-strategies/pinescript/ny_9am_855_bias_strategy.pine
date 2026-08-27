@@ -1,5 +1,5 @@
 //@version=6
-strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false, pyramiding=0, max_lines_count=500)
+strategy("ws-9AM open algo", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, calc_on_every_tick=false, pyramiding=0, max_lines_count=500)
 
 // Enters once per day at the NY 9:00 AM open, direction set by the 5-minute
 // 8:55 AM (America/New_York) candle: bullish -> long, bearish -> short.
@@ -12,9 +12,8 @@ strategy("NY 9AM Open - 8:55 Candle Bias", overlay=true, default_qty_type=strate
 // its range) never counts as confirmation; the wait continues.
 // Trade V3 (optional, independent of V1/V2): builds the 8:00-9:00 AM
 // opening range. The first candle body that closes beyond one side of
-// the range marks that side as broken (invalidated). Once a side is
-// broken, the trade is taken only when a later candle body closes
-// beyond the OPPOSITE side.
+// the range marks that side as broken. Once a side is broken, the trade
+// is taken only when a later candle body closes beyond the OPPOSITE side.
 // Run this strategy on the 5-minute chart.
 
 tpTicks   = input.int(300, "Take Profit (ticks)", minval=1, group="Risk")
@@ -24,15 +23,6 @@ qty       = input.float(1, "Order size", minval=0.01, group="Order")
 enableV2       = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
 dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (Doji filter)", minval=0, maxval=100, group="Strategy") / 100
 enableV3       = input.bool(false, "Trade V3: opposite-side break of the 8-9am range", group="Strategy")
-tpTicksV3      = input.int(450, "V3 Take Profit (ticks)", minval=1, group="Strategy")
-slTicksV3      = input.int(300, "V3 Stop Loss (ticks)",   minval=1, group="Strategy")
-
-enableHighlight  = input.bool(true, "Highlight big candles", group="Highlight")
-bigCandleMeasure = input.string("Range (High-Low)", "Measure", options=["Range (High-Low)", "Body (|Close-Open|)"], group="Highlight")
-bigCandleTicks   = input.int(300, "Highlight if candle size >= X ticks", minval=1, group="Highlight")
-highlightColor   = input.color(color.new(color.yellow, 60), "Highlight color", group="Highlight")
-highlightStartHr = input.int(8,  "Time filter start hour (NY)", minval=0, maxval=23, group="Highlight")
-highlightEndHr   = input.int(11, "Time filter end hour (NY)",   minval=0, maxval=23, group="Highlight")
 
 showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
 entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
@@ -52,17 +42,16 @@ nyDay    = dayofmonth(time, tz)
 
 is0855Bar = nyHour == 8 and nyMinute == 55
 
-var bool  tradedToday   = false
-var bool  v2Used        = false
-var bool  v2Pending     = false
-var float v2PendingDir  = na
-var float lastTradeDir  = na
-var int   lastDay = na
+var bool   tradedToday   = false
+var bool   v2Used        = false
+var bool   v2Pending     = false
+var float  v2PendingDir  = na
+var float  lastTradeDir  = na
+var int    lastDay = na
 var bool   tradedV3Today = false
 var string v3BrokenSide  = na
 var float  rangeHigh     = na
 var float  rangeLow      = na
-var bool   v3TradeActive = false
 
 if na(lastDay) or nyDay != lastDay
     lastDay := nyDay
@@ -95,12 +84,10 @@ if is0855Bar and not tradedToday
         strategy.entry("Long", strategy.long, qty=qty)
         strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         lastTradeDir := 1.0
-        v3TradeActive := false
     else if bearish
         strategy.entry("Short", strategy.short, qty=qty)
         strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         lastTradeDir := -1.0
-        v3TradeActive := false
 
 // --- Trade V2: reverse once if the current trade was stopped out ---
 // On stop-out, wait for the first confirming candle before reversing:
@@ -124,13 +111,11 @@ if v2Pending
         strategy.entry("Short V2", strategy.short, qty=qty)
         strategy.exit("Short V2 Exit", "Short V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         lastTradeDir := -1.0
-        v3TradeActive := false
     else if v2PendingDir == 1.0 and candleBullish
         v2Pending := false
         strategy.entry("Long V2", strategy.long, qty=qty)
         strategy.exit("Long V2 Exit", "Long V2", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         lastTradeDir := 1.0
-        v3TradeActive := false
 
 // --- Trade V3: trade the opposite-side break, once one side is already broken ---
 canWatchV3 = enableV3 and nyHour != 8 and not na(rangeHigh) and not na(rangeLow) and not tradedV3Today
@@ -143,14 +128,12 @@ if canWatchV3
             v3BrokenSide := "low"
     else if v3BrokenSide == "high" and close < rangeLow
         tradedV3Today := true
-        v3TradeActive := true
         strategy.entry("Short V3", strategy.short, qty=qty)
-        strategy.exit("Short V3 Exit", "Short V3", profit=tpTicksV3, loss=slTicksV3, comment_profit="TP", comment_loss="SL")
+        strategy.exit("Short V3 Exit", "Short V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
     else if v3BrokenSide == "low" and close > rangeHigh
         tradedV3Today := true
-        v3TradeActive := true
         strategy.entry("Long V3", strategy.long, qty=qty)
-        strategy.exit("Long V3 Exit", "Long V3", profit=tpTicksV3, loss=slTicksV3, comment_profit="TP", comment_loss="SL")
+        strategy.exit("Long V3 Exit", "Long V3", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
 
 // --- Entry / TP / SL lines + shaded zones for the active trade ---
 var line     entryLine = na
@@ -164,12 +147,10 @@ justEntered = strategy.position_size != 0 and (posSizePrev == 0 or math.sign(str
 inTrade     = strategy.position_size != 0
 
 if showLines and justEntered
-    float entryPrice    = strategy.position_avg_price
-    float dir           = strategy.position_size > 0 ? 1.0 : -1.0
-    float tpTicksActive = v3TradeActive ? tpTicksV3 : tpTicks
-    float slTicksActive = v3TradeActive ? slTicksV3 : slTicks
-    float tpPrice    = entryPrice + dir * tpTicksActive * syminfo.mintick
-    float slPrice    = entryPrice - dir * slTicksActive * syminfo.mintick
+    float entryPrice = strategy.position_avg_price
+    float dir        = strategy.position_size > 0 ? 1.0 : -1.0
+    float tpPrice    = entryPrice + dir * tpTicks * syminfo.mintick
+    float slPrice    = entryPrice - dir * slTicks * syminfo.mintick
 
     entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=entryColor, width=lineWidth, style=line.style_solid)
     tpLine    := line.new(bar_index, tpPrice,    bar_index, tpPrice,    color=tpColor,    width=lineWidth, style=lineStyle)
@@ -182,11 +163,3 @@ if showLines and inTrade and not na(entryLine)
     line.set_x2(entryLine, bar_index)
     line.set_x2(tpLine, bar_index)
     line.set_x2(slLine, bar_index)
-
-// --- Highlight candles bigger than a custom tick threshold, within a custom NY time window ---
-candleSizePrice = bigCandleMeasure == "Range (High-Low)" ? high - low : math.abs(close - open)
-candleSizeTicks = candleSizePrice / syminfo.mintick
-inHighlightWindow = nyHour >= highlightStartHr and nyHour < highlightEndHr
-isBigCandle = candleSizeTicks >= bigCandleTicks
-
-bgcolor(enableHighlight and inHighlightWindow and isBigCandle ? highlightColor : na)
