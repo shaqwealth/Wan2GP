@@ -8,23 +8,16 @@
 //   3. If price then breaks back through the OPPOSITE side of the range,
 //      treat the first breakout as a fakeout/liquidity sweep and enter in
 //      the direction of the second (reversal) breakout.
-//   4. Stop-loss sits at the low (long) / high (short) of the candle that
-//      triggers the entry, with a minimum distance in ticks: if that
-//      candle is too small (e.g. its wick is only 140 ticks away), the
-//      stop is pushed out to the minimum (e.g. 200 ticks) instead.
-//   5. Take-profit is the high (long) / low (short) of the most recently
-//      completed Asian session. A trade is skipped only until that
-//      session has produced a level (e.g. very first day of history);
-//      if price has already passed the level by entry time, the exit
-//      order closes the position at the next available price.
-//   6. No new entries after 11:00 (session timezone) by default; trades
+//   4. Fixed stop-loss and take-profit, both expressed in ticks
+//      (syminfo.mintick), default 450 ticks each.
+//   5. No new entries after 11:00 (session timezone) by default; trades
 //      already open keep running to their TP/SL.
 //
 // Import this file's content into a new Pine script on TradingView
 // (Pine Editor > New > paste), or drag-and-drop the .pine file if your
 // setup supports it, then add the strategy to a chart.
 
-//@version=5
+//@version=6
 strategy("Range Break Reversal (8-9AM NY)", overlay=true,
      default_qty_type=strategy.fixed, default_qty_value=1,
      initial_capital=100000, currency=currency.USD)
@@ -32,28 +25,26 @@ strategy("Range Break Reversal (8-9AM NY)", overlay=true,
 // ---------------- Inputs ----------------
 sessionRange   = input.session("0800-0900", "Range session", group="Range")
 sessionTZ      = input.string("America/New_York", "Session timezone", group="Range")
-asiaSessionStr = input.session("1700-0400", "Asian session (TP reference)", group="Take Profit")
-minSlTicks     = input.int(200, "Minimum stop distance (ticks)", minval=1, group="Risk")
+tpTicks        = input.int(450, "Take profit (ticks)", minval=1, group="Risk")
+slTicks        = input.int(450, "Stop loss (ticks)", minval=1, group="Risk")
 oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
 cutoffHour     = input.int(11, "No new entries after (hour, session tz)", minval=0, maxval=23, group="Risk")
 cutoffMinute   = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group="Risk")
 showRange      = input.bool(true, "Show range box", group="Display")
-showAsiaLevels = input.bool(true, "Show Asian high/low", group="Display")
 
-minSlDist = minSlTicks * syminfo.mintick
+tpDist = tpTicks * syminfo.mintick
+slDist = slTicks * syminfo.mintick
 
-// ---------------- NY range tracking (08:00-09:00) ----------------
+// ---------------- Session tracking ----------------
 inSession = not na(time(timeframe.period, sessionRange, sessionTZ))
 newDay    = ta.change(time("D", sessionTZ))
 
-var float rangeHigh       = na
-var float rangeLow        = na
-var bool  rangeReady      = false
-var bool  firstBreakUp    = false
-var bool  firstBreakDown  = false
+var float rangeHigh      = na
+var float rangeLow       = na
+var bool  rangeReady     = false
+var bool  firstBreakUp   = false
+var bool  firstBreakDown = false
 var bool  tradeTakenToday = false
-var float slCandleLow     = na
-var float slCandleHigh    = na
 var box   rangeBox = na
 var line  hiLine   = na
 var line  loLine   = na
@@ -79,31 +70,6 @@ if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
         hiLine := line.new(bar_index, rangeHigh, bar_index, rangeHigh, color=color.gray, extend=extend.right)
         loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=color.gray, extend=extend.right)
 
-// ---------------- Asian session high/low (most recently completed) ----------------
-// Same pattern as the NY range above: time() natively supports sessions
-// that wrap past midnight (e.g. "1700-0400"), so no extra day-boundary
-// helper functions are needed.
-asiaInSession = not na(time(timeframe.period, asiaSessionStr, sessionTZ))
-
-var float asiaHigh     = na
-var float asiaLow      = na
-var float lastAsiaHigh = na
-var float lastAsiaLow  = na
-
-if asiaInSession
-    asiaHigh := na(asiaHigh) ? high : math.max(asiaHigh, high)
-    asiaLow  := na(asiaLow)  ? low  : math.min(asiaLow, low)
-
-asiaSessionJustEnded = asiaInSession[1] and not asiaInSession
-if asiaSessionJustEnded and not na(asiaHigh) and not na(asiaLow)
-    lastAsiaHigh := asiaHigh
-    lastAsiaLow := asiaLow
-    asiaHigh := na
-    asiaLow := na
-
-plot(showAsiaLevels ? lastAsiaHigh : na, "Asia High", color=color.new(color.orange, 0), style=plot.style_linebr)
-plot(showAsiaLevels ? lastAsiaLow : na, "Asia Low", color=color.new(color.orange, 0), style=plot.style_linebr)
-
 // ---------------- Breakout / reversal detection ----------------
 beforeCutoff = (hour(time, sessionTZ) * 60 + minute(time, sessionTZ)) < (cutoffHour * 60 + cutoffMinute)
 canTrade = (not oneTradePerDay or not tradeTakenToday) and beforeCutoff
@@ -118,34 +84,31 @@ if rangeReady and not inSession
         else if breakDown
             firstBreakDown := true
 
-    validLongTarget  = not na(lastAsiaHigh)
-    validShortTarget = not na(lastAsiaLow)
-
-    longCond  = firstBreakDown and breakUp   and canTrade and validLongTarget
-    shortCond = firstBreakUp   and breakDown and canTrade and validShortTarget
+    longCond  = firstBreakDown and breakUp   and canTrade
+    shortCond = firstBreakUp   and breakDown and canTrade
 
     if longCond
-        slCandleLow := low
         strategy.entry("Long", strategy.long)
         tradeTakenToday := true
         firstBreakDown := false
         firstBreakUp := true
 
     if shortCond
-        slCandleHigh := high
         strategy.entry("Short", strategy.short)
         tradeTakenToday := true
         firstBreakUp := false
         firstBreakDown := true
 
-// ---------------- Exits: candle-based stop (with min distance) + Asia high/low target ----------------
+// ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
 if strategy.position_size > 0
-    stopPrice = math.min(slCandleLow, strategy.position_avg_price - minSlDist)
-    strategy.exit("Long Exit", "Long", limit=lastAsiaHigh, stop=stopPrice)
+    strategy.exit("Long Exit", "Long",
+         limit=strategy.position_avg_price + tpDist,
+         stop=strategy.position_avg_price - slDist)
 
 if strategy.position_size < 0
-    stopPrice = math.max(slCandleHigh, strategy.position_avg_price + minSlDist)
-    strategy.exit("Short Exit", "Short", limit=lastAsiaLow, stop=stopPrice)
+    strategy.exit("Short Exit", "Short",
+         limit=strategy.position_avg_price - tpDist,
+         stop=strategy.position_avg_price + slDist)
 
 plot(rangeReady ? rangeHigh : na, "Range High", color=color.new(color.gray, 0), style=plot.style_linebr)
 plot(rangeReady ? rangeLow : na, "Range Low", color=color.new(color.gray, 0), style=plot.style_linebr)
