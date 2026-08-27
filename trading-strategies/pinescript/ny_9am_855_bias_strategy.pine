@@ -23,6 +23,7 @@ qty       = input.float(1, "Order size", minval=0.01, group="Order")
 enableV2       = input.bool(false, "Trade V2: reverse once if stopped out", group="Strategy")
 dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (Doji filter)", minval=0, maxval=100, group="Strategy") / 100
 enableV3       = input.bool(false, "Trade V3: opposite-side break of the 8-9am range", group="Strategy")
+showDebugLabels = input.bool(true, "Show debug labels (V2 armed / V3 side broken)", group="Strategy")
 
 showLines   = input.bool(true, "Show entry/TP/SL lines", group="Display")
 entryColor  = input.color(color.blue,                  "Entry line color",  group="Display")
@@ -100,6 +101,10 @@ if enableV2 and justExited and not v2Used and strategy.closedtrades > 0
         v2Used := true
         v2Pending := true
         v2PendingDir := lastTradeDir == 1.0 ? -1.0 : 1.0
+        if showDebugLabels
+            label.new(bar_index, high, "V2 armed\nwaiting for " + (v2PendingDir == 1.0 ? "bullish" : "bearish") + " close", color=color.purple, style=label.style_label_down, textcolor=color.white, size=size.small)
+    else if showDebugLabels
+        label.new(bar_index, low, "Exit: " + strategy.closedtrades.exit_comment(strategy.closedtrades - 1), color=color.gray, style=label.style_label_up, textcolor=color.white, size=size.tiny)
 
 if v2Pending
     float candleRange = high - low
@@ -124,8 +129,12 @@ if canWatchV3
     if na(v3BrokenSide)
         if close > rangeHigh
             v3BrokenSide := "high"
+            if showDebugLabels
+                label.new(bar_index, high, "V3: high broken\nwaiting for low break", color=color.blue, style=label.style_label_down, textcolor=color.white, size=size.small)
         else if close < rangeLow
             v3BrokenSide := "low"
+            if showDebugLabels
+                label.new(bar_index, low, "V3: low broken\nwaiting for high break", color=color.orange, style=label.style_label_up, textcolor=color.white, size=size.small)
     else if v3BrokenSide == "high" and close < rangeLow
         tradedV3Today := true
         strategy.entry("Short V3", strategy.short, qty=qty)
