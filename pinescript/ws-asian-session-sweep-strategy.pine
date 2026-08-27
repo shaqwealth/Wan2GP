@@ -1,7 +1,5 @@
 //@version=6
-strategy("ws-Asian Session Sweep Strategy", shorttitle = "Asian Sweep Strategy", overlay = true,
-     max_labels_count = 500, default_qty_type = strategy.fixed, default_qty_value = 1,
-     pyramiding = 0, calc_on_every_tick = false)
+strategy("ws-Asian Session Sweep Strategy", shorttitle = "Asian Sweep Strategy", overlay = true, max_labels_count = 500, default_qty_type = strategy.fixed, default_qty_value = 1, pyramiding = 0, calc_on_every_tick = false)
 
 // Sessions (America/New_York)
 // Asian  20:30 → 03:00 | London 03:00 → 09:30
@@ -154,11 +152,7 @@ shortStopPrice = strategy.position_avg_price + slOffset
 shortTpPrice = strategy.position_avg_price - tpOffset
 
 if strategy.position_size > 0
-    strategy.exit("Long Exit", "Long",
-         stop = useSL ? longStopPrice : na,
-         limit = useTP ? longTpPrice : na)
+    strategy.exit("Long Exit", "Long", stop = useSL ? longStopPrice : float(na), limit = useTP ? longTpPrice : float(na))
 
 if strategy.position_size < 0
-    strategy.exit("Short Exit", "Short",
-         stop = useSL ? shortStopPrice : na,
-         limit = useTP ? shortTpPrice : na)
+    strategy.exit("Short Exit", "Short", stop = useSL ? shortStopPrice : float(na), limit = useTP ? shortTpPrice : float(na))
