@@ -1,0 +1,136 @@
+//@version=6
+strategy("ws-8AM CRT V3+V4 (Funded algo - 5m)", overlay=true,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     initial_capital=100000, currency=currency.USD)
+// ---------------- Inputs ----------------
+sessionRange   = input.session("0800-0900", "Range session", group="Range")
+sessionTZ      = input.string("America/New_York", "Session timezone", group="Range")
+tpTicks        = input.int(450, "Take profit (ticks)", minval=1, group="Risk")
+slTicks        = input.int(450, "Stop loss (ticks)", minval=1, group="Risk")
+oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
+cutoffHour     = input.int(11, "No new entries after (hour, session tz)", minval=0, maxval=23, group="Risk")
+cutoffMinute   = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group="Risk")
+enableV4       = input.bool(true, "Enable V4 reversal after V3 stop loss", group="V4 Reversal")
+tpTicksV4      = input.int(300, "V4 Take profit (ticks)", minval=1, group="V4 Reversal")
+slTicksV4      = input.int(200, "V4 Stop loss (ticks)", minval=1, group="V4 Reversal")
+showRange      = input.bool(true, "Show range box", group="Display")
+rangeLineColor = input.color(color.gray, "Range line color", group="Display")
+rangeLineWidth = input.int(1, "Range line width", minval=1, maxval=4, group="Display")
+entryLineColor = input.color(color.gray, "Entry line color", group="Display")
+tpLineColor    = input.color(color.green, "TP line color", group="Display")
+slLineColor    = input.color(color.red, "SL line color", group="Display")
+tpFillColor    = input.color(color.new(color.green, 85), "Entry→TP highlight color", group="Display")
+slFillColor    = input.color(color.new(color.red, 85), "Entry→SL highlight color", group="Display")
+tradeLineWidth = input.int(1, "Entry/TP/SL line width", minval=1, maxval=4, group="Display")
+tpDist   = tpTicks * syminfo.mintick
+slDist   = slTicks * syminfo.mintick
+tpDistV4 = tpTicksV4 * syminfo.mintick
+slDistV4 = slTicksV4 * syminfo.mintick
+// ---------------- Session tracking ----------------
+inSession = not na(time(timeframe.period, sessionRange, sessionTZ))
+newDay    = ta.change(time("D", sessionTZ)) != 0
+var float rangeHigh      = na
+var float rangeLow       = na
+var bool  rangeReady     = false
+var bool  firstBreakUp   = false
+var bool  firstBreakDown = false
+var bool  tradeTakenToday = false
+var box   rangeBox = na
+var line  hiLine   = na
+var line  loLine   = na
+if newDay
+    rangeHigh := na
+    rangeLow := na
+    rangeReady := false
+    firstBreakUp := false
+    firstBreakDown := false
+    tradeTakenToday := false
+if inSession
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow, low)
+sessionJustEnded = inSession[1] and not inSession
+if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
+    rangeReady := true
+    if showRange
+        rangeBox := box.new(bar_index, rangeHigh, bar_index, rangeLow,
+             border_color=rangeLineColor, bgcolor=color.new(rangeLineColor, 90), extend=extend.right)
+        hiLine := line.new(bar_index, rangeHigh, bar_index, rangeHigh, color=rangeLineColor, width=rangeLineWidth, extend=extend.right)
+        loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=rangeLineColor, width=rangeLineWidth, extend=extend.right)
+// ---------------- Breakout / reversal detection ----------------
+beforeCutoff = (hour(time, sessionTZ) * 60 + minute(time, sessionTZ)) < (cutoffHour * 60 + cutoffMinute)
+canTrade = (not oneTradePerDay or not tradeTakenToday) and beforeCutoff
+if rangeReady and not inSession
+    breakUp   = close > rangeHigh
+    breakDown = close < rangeLow
+    if not firstBreakUp and not firstBreakDown
+        if breakUp
+            firstBreakUp := true
+        else if breakDown
+            firstBreakDown := true
+    longCond  = firstBreakDown and breakUp   and canTrade
+    shortCond = firstBreakUp   and breakDown and canTrade
+    if longCond
+        strategy.entry("Long", strategy.long)
+        tradeTakenToday := true
+        firstBreakDown := false
+        firstBreakUp := true
+    if shortCond
+        strategy.entry("Short", strategy.short)
+        tradeTakenToday := true
+        firstBreakUp := false
+        firstBreakDown := true
+// ---------------- V4: opposite-direction trade fired when a V3 trade exits on its stop loss ----------------
+positionJustClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
+if enableV4 and positionJustClosed and strategy.closedtrades > 0
+    // comment_profit/comment_loss below tag each exit, so we can tell a stop-loss exit
+    // apart from a take-profit exit and only reverse on the former.
+    lastNum         = strategy.closedtrades - 1
+    lastEntryId     = strategy.closedtrades.entry_id(lastNum)
+    lastExitComment = strategy.closedtrades.exit_comment(lastNum)
+    if lastExitComment == "SL"
+        if lastEntryId == "Long"
+            strategy.entry("V4 Short", strategy.short)
+        else if lastEntryId == "Short"
+            strategy.entry("V4 Long", strategy.long)
+// ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
+// entry/TP/SL lines + filled highlight zones (no text labels)
+var line     entryLine = na
+var line     tpLine    = na
+var line     slLine    = na
+var linefill tpFill    = na
+var linefill slFill    = na
+
+if strategy.position_size != 0
+    entryBar   = strategy.opentrades.entry_bar_index(0)
+    entryPrice = strategy.opentrades.entry_price(0)
+    entryId    = strategy.opentrades.entry_id(0)
+    isV4       = entryId == "V4 Long" or entryId == "V4 Short"
+    isLong     = strategy.position_size > 0
+    curTpDist  = isV4 ? tpDistV4 : tpDist
+    curSlDist  = isV4 ? slDistV4 : slDist
+    tp = isLong ? entryPrice + curTpDist : entryPrice - curTpDist
+    sl = isLong ? entryPrice - curSlDist : entryPrice + curSlDist
+
+    if na(entryLine)
+        entryLine := line.new(entryBar, entryPrice, bar_index, entryPrice, color=entryLineColor, width=tradeLineWidth)
+        tpLine    := line.new(entryBar, tp,          bar_index, tp,          color=tpLineColor, width=tradeLineWidth)
+        slLine    := line.new(entryBar, sl,          bar_index, sl,          color=slLineColor, width=tradeLineWidth)
+        tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
+        slFill    := linefill.new(entryLine, slLine, color=slFillColor)
+    else
+        line.set_x2(entryLine, bar_index)
+        line.set_x2(tpLine, bar_index)
+        line.set_x2(slLine, bar_index)
+
+    strategy.exit(entryId + " Exit", entryId, limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
+else
+    // trade closed (or flat): stop tracking so the next trade starts fresh lines.
+    // previously drawn lines/fills are left on the chart as history.
+    entryLine := na
+    tpLine    := na
+    slLine    := na
+    tpFill    := na
+    slFill    := na
+
+plot(rangeReady ? rangeHigh : na, "Range High", color=rangeLineColor, style=plot.style_linebr)
+plot(rangeReady ? rangeLow : na, "Range Low", color=rangeLineColor, style=plot.style_linebr)
