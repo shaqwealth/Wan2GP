@@ -83,25 +83,26 @@ if rangeReady and not inSession
         firstBreakUp := false
         firstBreakDown := true
 // ---------------- V4: opposite-direction trade fired when a V3 trade exits on its stop loss ----------------
+// Fixed TP/SL are the only way a trade can close here, so a losing trade (profit < 0) can
+// only mean the stop was hit — a more robust signal than matching the exit order's comment text.
 positionJustClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
 if enableV4 and positionJustClosed and strategy.closedtrades > 0
-    // comment_profit/comment_loss below tag each exit, so we can tell a stop-loss exit
-    // apart from a take-profit exit and only reverse on the former.
-    lastNum         = strategy.closedtrades - 1
-    lastEntryId     = strategy.closedtrades.entry_id(lastNum)
-    lastExitComment = strategy.closedtrades.exit_comment(lastNum)
-    if lastExitComment == "SL"
+    lastNum      = strategy.closedtrades - 1
+    lastEntryId  = strategy.closedtrades.entry_id(lastNum)
+    wasStopLoss  = strategy.closedtrades.profit(lastNum) < 0
+    if wasStopLoss
         if lastEntryId == "Long"
             strategy.entry("V4 Short", strategy.short)
         else if lastEntryId == "Short"
             strategy.entry("V4 Long", strategy.long)
 // ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
-// entry/TP/SL lines + filled highlight zones (no text labels)
-var line     entryLine = na
-var line     tpLine    = na
-var line     slLine    = na
-var linefill tpFill    = na
-var linefill slFill    = na
+// entry/TP/SL lines + shaded zones (boxes render more reliably than linefill between two
+// lines that start at zero width) + a label at the exit price
+var line entryLine = na
+var line tpLine    = na
+var line slLine    = na
+var box  tpZone    = na
+var box  slZone    = na
 
 if strategy.position_size != 0
     entryBar   = strategy.opentrades.entry_bar_index(0)
@@ -118,38 +119,41 @@ if strategy.position_size != 0
         entryLine := line.new(entryBar, entryPrice, bar_index, entryPrice, color=entryLineColor, width=tradeLineWidth)
         tpLine    := line.new(entryBar, tp,          bar_index, tp,          color=tpLineColor, width=tradeLineWidth)
         slLine    := line.new(entryBar, sl,          bar_index, sl,          color=slLineColor, width=tradeLineWidth)
-        tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
-        slFill    := linefill.new(entryLine, slLine, color=slFillColor)
+        tpZone    := box.new(entryBar, math.max(entryPrice, tp), bar_index, math.min(entryPrice, tp), border_color=na, bgcolor=tpFillColor)
+        slZone    := box.new(entryBar, math.max(entryPrice, sl), bar_index, math.min(entryPrice, sl), border_color=na, bgcolor=slFillColor)
     else
         line.set_x2(entryLine, bar_index)
         line.set_x2(tpLine, bar_index)
         line.set_x2(slLine, bar_index)
+        box.set_right(tpZone, bar_index)
+        box.set_right(slZone, bar_index)
 
     strategy.exit(entryId + " Exit", entryId, limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
 else
     // A stop/limit fill is applied before this bar's script logic runs, so by the time we
     // get here strategy.position_size is already 0 on the very bar the trade exited. Without
-    // this branch the lines/highlight would freeze one bar early and never show the exit.
+    // this branch the lines/zones would freeze one bar early and never show the exit.
     if strategy.position_size[1] != 0 and strategy.closedtrades > 0 and not na(entryLine)
         lastNum    = strategy.closedtrades - 1
         exitPrice  = strategy.closedtrades.exit_price(lastNum)
-        exitReason = strategy.closedtrades.exit_comment(lastNum)
+        isWin      = strategy.closedtrades.profit(lastNum) >= 0
         line.set_x2(entryLine, bar_index)
         line.set_x2(tpLine, bar_index)
         line.set_x2(slLine, bar_index)
+        box.set_right(tpZone, bar_index)
+        box.set_right(slZone, bar_index)
         if showExitLabels
-            isWin = exitReason == "TP"
-            label.new(bar_index, exitPrice, exitReason,
+            label.new(bar_index, exitPrice, isWin ? "TP" : "SL",
                  style=isWin ? label.style_label_down : label.style_label_up,
                  color=isWin ? tpLabelColor : slLabelColor,
                  textcolor=color.white, size=size.small)
-    // trade closed (or flat): stop tracking so the next trade starts fresh lines.
-    // previously drawn lines/fills are left on the chart as history.
+    // trade closed (or flat): stop tracking so the next trade starts fresh lines/zones.
+    // previously drawn ones are left on the chart as history.
     entryLine := na
     tpLine    := na
     slLine    := na
-    tpFill    := na
-    slFill    := na
+    tpZone    := na
+    slZone    := na
 
 plot(rangeReady ? rangeHigh : na, "Range High", color=rangeLineColor, style=plot.style_linebr)
 plot(rangeReady ? rangeLow : na, "Range Low", color=rangeLineColor, style=plot.style_linebr)
