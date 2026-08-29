@@ -22,6 +22,9 @@ slLineColor    = input.color(color.red, "SL line color", group="Display")
 tpFillColor    = input.color(color.new(color.green, 85), "Entry→TP highlight color", group="Display")
 slFillColor    = input.color(color.new(color.red, 85), "Entry→SL highlight color", group="Display")
 tradeLineWidth = input.int(1, "Entry/TP/SL line width", minval=1, maxval=4, group="Display")
+showExitLabels = input.bool(true, "Show exit labels (TP/SL)", group="Display")
+tpLabelColor   = input.color(color.green, "TP exit label color", group="Display")
+slLabelColor   = input.color(color.red, "SL exit label color", group="Display")
 tpDist   = tpTicks * syminfo.mintick
 slDist   = slTicks * syminfo.mintick
 tpDistV4 = tpTicksV4 * syminfo.mintick
@@ -124,6 +127,22 @@ if strategy.position_size != 0
 
     strategy.exit(entryId + " Exit", entryId, limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
 else
+    // A stop/limit fill is applied before this bar's script logic runs, so by the time we
+    // get here strategy.position_size is already 0 on the very bar the trade exited. Without
+    // this branch the lines/highlight would freeze one bar early and never show the exit.
+    if strategy.position_size[1] != 0 and strategy.closedtrades > 0 and not na(entryLine)
+        lastNum    = strategy.closedtrades - 1
+        exitPrice  = strategy.closedtrades.exit_price(lastNum)
+        exitReason = strategy.closedtrades.exit_comment(lastNum)
+        line.set_x2(entryLine, bar_index)
+        line.set_x2(tpLine, bar_index)
+        line.set_x2(slLine, bar_index)
+        if showExitLabels
+            isWin = exitReason == "TP"
+            label.new(bar_index, exitPrice, exitReason,
+                 style=isWin ? label.style_label_down : label.style_label_up,
+                 color=isWin ? tpLabelColor : slLabelColor,
+                 textcolor=color.white, size=size.small)
     // trade closed (or flat): stop tracking so the next trade starts fresh lines.
     // previously drawn lines/fills are left on the chart as history.
     entryLine := na
