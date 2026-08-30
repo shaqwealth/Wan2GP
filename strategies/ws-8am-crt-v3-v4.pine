@@ -1,8 +1,5 @@
 //@version=6
-strategy("ws-8AM CRT V3/V4 (Funded algo - 5m)", overlay=true,
-     default_qty_type=strategy.fixed, default_qty_value=1,
-     initial_capital=100000, currency=currency.USD,
-     max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+strategy("ws-8AM CRT V3/V4 (Funded algo - 5m)", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, initial_capital=100000, currency=currency.USD, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 // ---------------- Inputs ----------------
 sessionRange   = input.session("0800-0900", "Range session", group="Range")
 sessionTZ      = input.string("America/New_York", "Session timezone", group="Range")
@@ -62,8 +59,7 @@ sessionJustEnded = inSession[1] and not inSession
 if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
     rangeReady := true
     if showRange
-        rangeBox := box.new(bar_index, rangeHigh, bar_index, rangeLow,
-             border_color=rangeLineColor, bgcolor=color.new(rangeLineColor, 90), extend=extend.right)
+        rangeBox := box.new(bar_index, rangeHigh, bar_index, rangeLow, border_color=rangeLineColor, bgcolor=color.new(rangeLineColor, 90), extend=extend.right)
         hiLine := line.new(bar_index, rangeHigh, bar_index, rangeHigh, color=rangeLineColor, width=rangeLineWidth, extend=extend.right)
         loLine := line.new(bar_index, rangeLow, bar_index, rangeLow, color=rangeLineColor, width=rangeLineWidth, extend=extend.right)
 // ---------------- Breakout / reversal detection ----------------
@@ -154,47 +150,45 @@ if strategy.position_size != 0
     curTp = isV4 ? tpTicksV4 : tpTicks
     curSl = isV4 ? slTicksV4 : slTicks
     strategy.exit(entryId + " Exit", entryId, profit=curTp, loss=curSl, comment_profit="TP", comment_loss="SL")
-else if tradeJustClosed
-    // A stop/limit fill is applied before this bar's script logic runs, so by the time we
-    // get here strategy.position_size is already 0 on the very bar the trade exited. Without
-    // this branch the lines/highlight would freeze one bar early and never show the exit.
-    lastNum    = strategy.closedtrades - 1
-    entryBar   = strategy.closedtrades.entry_bar_index(lastNum)
-    entryPrice = strategy.closedtrades.entry_price(lastNum)
-    entryId    = strategy.closedtrades.entry_id(lastNum)
-    exitBar    = strategy.closedtrades.exit_bar_index(lastNum)
-    exitPrice  = strategy.closedtrades.exit_price(lastNum)
-    exitReason = strategy.closedtrades.exit_comment(lastNum)
-    isV4       = entryId == "V4 Long" or entryId == "V4 Short"
-    isLong     = strategy.closedtrades.size(lastNum) > 0
-    tp = isLong ? entryPrice + (isV4 ? tpDistV4 : tpDist) : entryPrice - (isV4 ? tpDistV4 : tpDist)
-    sl = isLong ? entryPrice - (isV4 ? slDistV4 : slDist) : entryPrice + (isV4 ? slDistV4 : slDist)
-    lineStyle = isV4 and dashV4 ? line.style_dashed : line.style_solid
-    if na(entryLine) or nz(drawnBar, -1) != entryBar
-        // entry and exit landed on the same bar, so the block above never ran for this
-        // trade: draw the whole picture here from the closed-trade record.
-        drawnBar  := entryBar
-        entryLine := line.new(entryBar, entryPrice, exitBar, entryPrice, color=entryLineColor, width=tradeLineWidth, style=lineStyle)
-        tpLine    := line.new(entryBar, tp,         exitBar, tp,         color=tpLineColor, width=tradeLineWidth, style=lineStyle)
-        slLine    := line.new(entryBar, sl,         exitBar, sl,         color=slLineColor, width=tradeLineWidth, style=lineStyle)
-        tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
-        slFill    := linefill.new(entryLine, slLine, color=slFillColor)
-    else
-        line.set_x2(entryLine, exitBar)
-        line.set_x2(tpLine, exitBar)
-        line.set_x2(slLine, exitBar)
-    if showExitLabels
-        isWin = exitReason == "TP"
-        label.new(exitBar, exitPrice, exitReason,
-             style=isWin ? label.style_label_down : label.style_label_up,
-             color=isWin ? tpLabelColor : slLabelColor,
-             textcolor=color.white, size=size.small)
-    // trade closed: stop tracking so the next trade starts fresh lines.
-    // previously drawn lines/fills are left on the chart as history.
-    entryLine := na
-    tpLine    := na
-    slLine    := na
-    tpFill    := na
-    slFill    := na
+else
+    if tradeJustClosed
+        // A stop/limit fill is applied before this bar's script logic runs, so by the time we
+        // get here strategy.position_size is already 0 on the very bar the trade exited. Without
+        // this branch the lines/highlight would freeze one bar early and never show the exit.
+        lastNum    = strategy.closedtrades - 1
+        entryBar   = strategy.closedtrades.entry_bar_index(lastNum)
+        entryPrice = strategy.closedtrades.entry_price(lastNum)
+        entryId    = strategy.closedtrades.entry_id(lastNum)
+        exitBar    = strategy.closedtrades.exit_bar_index(lastNum)
+        exitPrice  = strategy.closedtrades.exit_price(lastNum)
+        exitReason = strategy.closedtrades.exit_comment(lastNum)
+        isV4       = entryId == "V4 Long" or entryId == "V4 Short"
+        isLong     = strategy.closedtrades.size(lastNum) > 0
+        tp = isLong ? entryPrice + (isV4 ? tpDistV4 : tpDist) : entryPrice - (isV4 ? tpDistV4 : tpDist)
+        sl = isLong ? entryPrice - (isV4 ? slDistV4 : slDist) : entryPrice + (isV4 ? slDistV4 : slDist)
+        lineStyle = isV4 and dashV4 ? line.style_dashed : line.style_solid
+        if na(entryLine) or nz(drawnBar, -1) != entryBar
+            // entry and exit landed on the same bar, so the block above never ran for this
+            // trade: draw the whole picture here from the closed-trade record.
+            drawnBar  := entryBar
+            entryLine := line.new(entryBar, entryPrice, exitBar, entryPrice, color=entryLineColor, width=tradeLineWidth, style=lineStyle)
+            tpLine    := line.new(entryBar, tp,         exitBar, tp,         color=tpLineColor, width=tradeLineWidth, style=lineStyle)
+            slLine    := line.new(entryBar, sl,         exitBar, sl,         color=slLineColor, width=tradeLineWidth, style=lineStyle)
+            tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
+            slFill    := linefill.new(entryLine, slLine, color=slFillColor)
+        else
+            line.set_x2(entryLine, exitBar)
+            line.set_x2(tpLine, exitBar)
+            line.set_x2(slLine, exitBar)
+        if showExitLabels
+            isWin = exitReason == "TP"
+            label.new(exitBar, exitPrice, exitReason, style=isWin ? label.style_label_down : label.style_label_up, color=isWin ? tpLabelColor : slLabelColor, textcolor=color.white, size=size.small)
+        // trade closed: stop tracking so the next trade starts fresh lines.
+        // previously drawn lines/fills are left on the chart as history.
+        entryLine := na
+        tpLine    := na
+        slLine    := na
+        tpFill    := na
+        slFill    := na
 plot(rangeReady ? rangeHigh : na, "Range High", color=rangeLineColor, style=plot.style_linebr)
 plot(rangeReady ? rangeLow : na, "Range Low", color=rangeLineColor, style=plot.style_linebr)
