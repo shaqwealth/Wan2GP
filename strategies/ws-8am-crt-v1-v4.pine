@@ -1,0 +1,339 @@
+//@version=6
+strategy("ws-8AM CRT V1-V4 (Funded algo - 5m)", overlay=true,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     initial_capital=100000, currency=currency.USD,
+     pyramiding=0, calc_on_every_tick=false,
+     max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// The four models of the 8AM CRT setup in a single strategy.
+//
+// Primary entries (picked with "Primary model"):
+//   V1 - direction taken from the 5m 08:55 NY candle, entry on its close.
+//        Falls back to the 08:50 candle when 08:55 closes flat.
+//   V3 - CRT on the 08:00-09:00 NY range: wait for a first break of the range,
+//        then enter on the opposite break (the reversal back through the range).
+//
+// Reprisals, taken after a primary trade is stopped out:
+//   V2 - reverses a stopped V1, but only once a confirming candle closes
+//        (bearish close to go short, bullish close to go long). A doji (tiny
+//        body relative to its range) never confirms; the wait continues.
+//   V4 - reverses a stopped V3 straight away, no confirmation candle.
+//
+// A reprisal is only ever armed by a stopped *primary* trade (V1/V3), never by
+// a stopped V2/V4, so reprisals cannot chain. It is capped at one per day across
+// all models and blocked after the cutoff, exactly like V2 in the original script.
+//
+// Only one position is ever open: no model enters while another trade is running
+// or while a V2 confirmation is still being waited for.
+//
+// Run on the 5-minute chart.
+
+// ---------------- Models ----------------
+gModel       = "Models"
+primaryModel = input.string("V1 + V3", "Primary model", options=["V1", "V3", "V1 + V3"], group=gModel)
+enableV2     = input.bool(true, "V2 reprisal after a V1 stop (waits for confirmation)", group=gModel)
+enableV4     = input.bool(true, "V4 reprisal after a V3 stop (immediate)", group=gModel)
+useV1 = primaryModel != "V3"
+useV3 = primaryModel != "V1"
+
+// ---------------- Session / timing ----------------
+gTime        = "Session / timing"
+sessionTZ    = input.string("America/New_York", "Timezone", group=gTime)
+sessionRange = input.session("0800-0900", "V3 range session", group=gTime)
+v1Hour       = input.int(8,  "V1 signal candle - hour",   minval=0, maxval=23, group=gTime)
+v1Minute     = input.int(55, "V1 signal candle - minute", minval=0, maxval=59, group=gTime)
+cutoffHour   = input.int(11, "No new entries after (hour)",   minval=0, maxval=23, group=gTime)
+cutoffMinute = input.int(0,  "No new entries after (minute)", minval=0, maxval=59, group=gTime)
+useTimeExit  = input.bool(false, "Close any open trade at a fixed time", group=gTime)
+exitHour     = input.int(16, "Close time (hour)",   minval=0, maxval=23, group=gTime)
+exitMinute   = input.int(0,  "Close time (minute)", minval=0, maxval=59, group=gTime)
+
+// ---------------- Risk, per model ----------------
+gV1   = "V1 - 08:55 candle"
+qtyV1 = input.float(1, "V1 order size",           minval=0.01, group=gV1)
+tpV1  = input.int(300, "V1 take profit (ticks)",  minval=1,    group=gV1)
+slV1  = input.int(200, "V1 stop loss (ticks)",    minval=1,    group=gV1)
+
+gV2   = "V2 - reprisal after V1"
+qtyV2 = input.float(1, "V2 order size",           minval=0.01, group=gV2)
+tpV2  = input.int(300, "V2 take profit (ticks)",  minval=1,    group=gV2)
+slV2  = input.int(200, "V2 stop loss (ticks)",    minval=1,    group=gV2)
+dojiMaxBodyPct = input.float(10.0, "Ignore confirmation candle if body <= X% of range (doji filter)", minval=0, maxval=100, group=gV2) / 100
+
+gV3        = "V3 - CRT range break"
+qtyV3      = input.float(1, "V3 order size",          minval=0.01, group=gV3)
+tpV3       = input.int(450, "V3 take profit (ticks)", minval=1,    group=gV3)
+slV3       = input.int(450, "V3 stop loss (ticks)",   minval=1,    group=gV3)
+oneV3PerDay = input.bool(true, "One V3 trade per day", group=gV3)
+
+gV4   = "V4 - reprisal after V3"
+qtyV4 = input.float(1, "V4 order size",           minval=0.01, group=gV4)
+tpV4  = input.int(300, "V4 take profit (ticks)",  minval=1,    group=gV4)
+slV4  = input.int(200, "V4 stop loss (ticks)",    minval=1,    group=gV4)
+
+// ---------------- Display ----------------
+gDisp          = "Display"
+showRange      = input.bool(true, "Show V3 range box", group=gDisp)
+rangeLineColor = input.color(color.gray, "Range line color", group=gDisp)
+rangeLineWidth = input.int(1, "Range line width", minval=1, maxval=4, group=gDisp)
+showTradeLines = input.bool(true, "Show entry/TP/SL lines", group=gDisp)
+entryLineColor = input.color(color.blue,  "Entry line color", group=gDisp)
+tpLineColor    = input.color(color.green, "TP line color",    group=gDisp)
+slLineColor    = input.color(color.red,   "SL line color",    group=gDisp)
+tpFillColor    = input.color(color.new(color.green, 85), "Entry->TP highlight color", group=gDisp)
+slFillColor    = input.color(color.new(color.red, 85),   "Entry->SL highlight color", group=gDisp)
+tradeLineWidth = input.int(1, "Entry/TP/SL line width", minval=1, maxval=4, group=gDisp)
+lineStyleIn    = input.string("Dashed", "TP/SL line style", options=["Solid", "Dashed", "Dotted"], group=gDisp)
+showExitLabels = input.bool(true, "Show exit labels (TP/SL)", group=gDisp)
+tpLabelColor   = input.color(color.green, "TP exit label color", group=gDisp)
+slLabelColor   = input.color(color.red,   "SL exit label color", group=gDisp)
+lineStyle = lineStyleIn == "Solid" ? line.style_solid : lineStyleIn == "Dotted" ? line.style_dotted : line.style_dashed
+
+// Every order id carries its model ("V1 Long", "V4 Short", ...), so the bracket
+// distances and the drawing code can always be resolved back from the id alone.
+tpTicksOf(string id) =>
+    str.contains(id, "V1") ? tpV1 : str.contains(id, "V2") ? tpV2 : str.contains(id, "V3") ? tpV3 : tpV4
+slTicksOf(string id) =>
+    str.contains(id, "V1") ? slV1 : str.contains(id, "V2") ? slV2 : str.contains(id, "V3") ? slV3 : slV4
+
+// ---------------- Day / session tracking ----------------
+minsNow      = hour(time, sessionTZ) * 60 + minute(time, sessionTZ)
+beforeCutoff = minsNow < cutoffHour * 60 + cutoffMinute
+// Calendar date in the session timezone. time("D", tz) would feed the timezone
+// into time()'s *session* argument, so the day never changes; this rolls the
+// state over at NY midnight whatever the symbol's own daily session does.
+nyDate       = year(time, sessionTZ) * 10000 + month(time, sessionTZ) * 100 + dayofmonth(time, sessionTZ)
+newDay       = ta.change(nyDate) != 0
+inSession    = not na(time(timeframe.period, sessionRange, sessionTZ))
+
+var float  rangeHigh      = na
+var float  rangeLow       = na
+var bool   rangeReady     = false
+var bool   firstBreakUp   = false
+var bool   firstBreakDown = false
+var bool   v1Done         = false
+var bool   v3Done         = false
+var bool   repriseUsed    = false   // one reprisal per day, V2 and V4 combined
+var bool   repPending     = false
+var int    repDir         = 0       // 1 = long, -1 = short
+var string repKind        = ""      // "V2" or "V4"
+var box    rangeBox       = na
+var line   hiLine         = na
+var line   loLine         = na
+
+if newDay
+    rangeHigh := na
+    rangeLow := na
+    rangeReady := false
+    firstBreakUp := false
+    firstBreakDown := false
+    v1Done := false
+    v3Done := false
+    repriseUsed := false
+    repPending := false
+    repDir := 0
+    repKind := ""
+
+if inSession
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow, low)
+
+sessionJustEnded = inSession[1] and not inSession
+if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
+    rangeReady := true
+    if showRange and useV3
+        rangeBox := box.new(bar_index, rangeHigh, bar_index, rangeLow,
+             border_color=rangeLineColor, bgcolor=color.new(rangeLineColor, 90), extend=extend.right)
+        hiLine := line.new(bar_index, rangeHigh, bar_index, rangeHigh, color=rangeLineColor, width=rangeLineWidth, extend=extend.right)
+        loLine := line.new(bar_index, rangeLow,  bar_index, rangeLow,  color=rangeLineColor, width=rangeLineWidth, extend=extend.right)
+
+// Set as soon as an entry is sent, so two models can never fire on the same bar:
+// the order is still unfilled at that point, so strategy.position_size is no guard.
+bool orderPlaced = false
+
+// ---------------- Arming a reprisal ----------------
+// Counting closed trades (rather than watching position_size[1]) also catches a
+// trade that entered and hit its stop inside a single bar, which never shows a
+// non-flat prior bar.
+tradeJustClosed = strategy.position_size == 0 and strategy.closedtrades > nz(strategy.closedtrades[1])
+
+if tradeJustClosed
+    lastNum     = strategy.closedtrades - 1
+    lastEntryId = strategy.closedtrades.entry_id(lastNum)
+    lastExit    = strategy.closedtrades.exit_comment(lastNum)
+    wasLong     = strategy.closedtrades.size(lastNum) > 0
+    fromV1      = str.contains(lastEntryId, "V1")
+    fromV3      = str.contains(lastEntryId, "V3")
+    kind        = fromV1 ? "V2" : "V4"
+    kindEnabled = fromV1 ? enableV2 : enableV4
+    // Only a stopped primary arms a reprisal - a stopped V2/V4 arms nothing, so
+    // reprisals can never chain. One per day, and never past the cutoff.
+    // comment_loss="SL" on every bracket is what tells a stop apart from a target
+    // (and from the timed "EOD" close, which must not arm anything).
+    if lastExit == "SL" and (fromV1 or fromV3) and kindEnabled and not repriseUsed and beforeCutoff
+        repriseUsed := true
+        repPending  := true
+        repDir      := wasLong ? -1 : 1
+        repKind     := kind
+
+// ---------------- Taking the reprisal ----------------
+// The cutoff also closes the window on a V2 still waiting for its candle.
+if repPending and not beforeCutoff
+    repPending := false
+
+if repPending and strategy.position_size == 0 and not orderPlaced
+    float candleRange = high - low
+    bool  isDoji      = candleRange > 0 and math.abs(close - open) / candleRange <= dojiMaxBodyPct
+    // V4 goes in at once; V2 waits for the first candle closing its way.
+    bool confirmLong  = repKind == "V4" or (close > open and not isDoji)
+    bool confirmShort = repKind == "V4" or (close < open and not isDoji)
+    if repDir == 1 and confirmLong
+        repId = repKind + " Long"
+        strategy.entry(repId, strategy.long, qty = repKind == "V2" ? qtyV2 : qtyV4)
+        strategy.exit(repId + " Exit", repId, profit=tpTicksOf(repId), loss=slTicksOf(repId), comment_profit="TP", comment_loss="SL")
+        repPending := false
+        orderPlaced := true
+    else if repDir == -1 and confirmShort
+        repId = repKind + " Short"
+        strategy.entry(repId, strategy.short, qty = repKind == "V2" ? qtyV2 : qtyV4)
+        strategy.exit(repId + " Exit", repId, profit=tpTicksOf(repId), loss=slTicksOf(repId), comment_profit="TP", comment_loss="SL")
+        repPending := false
+        orderPlaced := true
+
+// ---------------- V1: the 08:55 candle ----------------
+isV1Bar = hour(time, sessionTZ) == v1Hour and minute(time, sessionTZ) == v1Minute
+if useV1 and isV1Bar and not v1Done and beforeCutoff and strategy.position_size == 0 and not orderPlaced and not repPending
+    v1Done := true
+    bool bullish = close > open
+    bool bearish = close < open
+    if not bullish and not bearish
+        // 08:55 closed flat -> fall back to the 08:50 candle
+        bullish := close[1] > open[1]
+        bearish := close[1] < open[1]
+    if bullish
+        strategy.entry("V1 Long", strategy.long, qty=qtyV1)
+        // The bracket goes in with the entry so it is live on the fill bar itself;
+        // target and stop are in ticks off the fill price, so they need no
+        // reference to the open position.
+        strategy.exit("V1 Long Exit", "V1 Long", profit=tpV1, loss=slV1, comment_profit="TP", comment_loss="SL")
+        orderPlaced := true
+    else if bearish
+        strategy.entry("V1 Short", strategy.short, qty=qtyV1)
+        strategy.exit("V1 Short Exit", "V1 Short", profit=tpV1, loss=slV1, comment_profit="TP", comment_loss="SL")
+        orderPlaced := true
+
+// ---------------- V3: sweep of the range, then the reversal back through it ----------------
+if useV3 and rangeReady and not inSession
+    breakUp   = close > rangeHigh
+    breakDown = close < rangeLow
+    if not firstBreakUp and not firstBreakDown
+        if breakUp
+            firstBreakUp := true
+        else if breakDown
+            firstBreakDown := true
+    canV3     = (not oneV3PerDay or not v3Done) and beforeCutoff and strategy.position_size == 0 and not orderPlaced and not repPending
+    longCond  = firstBreakDown and breakUp   and canV3
+    shortCond = firstBreakUp   and breakDown and canV3
+    if longCond
+        strategy.entry("V3 Long", strategy.long, qty=qtyV3)
+        strategy.exit("V3 Long Exit", "V3 Long", profit=tpV3, loss=slV3, comment_profit="TP", comment_loss="SL")
+        v3Done := true
+        orderPlaced := true
+        firstBreakDown := false
+        firstBreakUp := true
+    if shortCond
+        strategy.entry("V3 Short", strategy.short, qty=qtyV3)
+        strategy.exit("V3 Short Exit", "V3 Short", profit=tpV3, loss=slV3, comment_profit="TP", comment_loss="SL")
+        v3Done := true
+        orderPlaced := true
+        firstBreakUp := false
+        firstBreakDown := true
+
+// ---------------- Time-based flat ----------------
+// Without this a trade sits open until TP or SL is touched, which on a wide
+// bracket can span several sessions. Off by default so it does not silently
+// change existing results.
+timeToFlat = useTimeExit and minsNow >= exitHour * 60 + exitMinute
+if timeToFlat
+    repPending := false
+    if strategy.position_size != 0
+        // "EOD" (not "SL") so a timed close never arms a reprisal.
+        strategy.close_all(comment="EOD")
+
+// ---------------- Entry / TP / SL lines and highlight zones ----------------
+var line     entryLine = na
+var line     tpLine    = na
+var line     slLine    = na
+var linefill tpFill    = na
+var linefill slFill    = na
+
+if strategy.position_size != 0
+    entryBar   = strategy.opentrades.entry_bar_index(0)
+    entryPrice = strategy.opentrades.entry_price(0)
+    entryId    = strategy.opentrades.entry_id(0)
+    isLong     = strategy.position_size > 0
+    tpDist     = tpTicksOf(entryId) * syminfo.mintick
+    slDist     = slTicksOf(entryId) * syminfo.mintick
+    tp = isLong ? entryPrice + tpDist : entryPrice - tpDist
+    sl = isLong ? entryPrice - slDist : entryPrice + slDist
+    if showTradeLines
+        if na(entryLine)
+            entryLine := line.new(entryBar, entryPrice, bar_index, entryPrice, color=entryLineColor, width=tradeLineWidth)
+            tpLine    := line.new(entryBar, tp,         bar_index, tp,         color=tpLineColor, width=tradeLineWidth, style=lineStyle)
+            slLine    := line.new(entryBar, sl,         bar_index, sl,         color=slLineColor, width=tradeLineWidth, style=lineStyle)
+            tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
+            slFill    := linefill.new(entryLine, slLine, color=slFillColor)
+        else
+            line.set_x2(entryLine, bar_index)
+            line.set_x2(tpLine, bar_index)
+            line.set_x2(slLine, bar_index)
+    // Same order id as the bracket sent with the entry, so this refreshes it
+    // rather than adding a second one. No qty: the exit closes whatever size the
+    // entry filled, whichever model it came from.
+    strategy.exit(entryId + " Exit", entryId, profit=tpTicksOf(entryId), loss=slTicksOf(entryId), comment_profit="TP", comment_loss="SL")
+else if tradeJustClosed
+    // A stop/limit fill is applied before this bar's script logic runs, so by the
+    // time we get here strategy.position_size is already 0 on the very bar the
+    // trade exited. Without this branch the lines would freeze one bar early and
+    // never show the exit.
+    lastNum    = strategy.closedtrades - 1
+    entryBar   = strategy.closedtrades.entry_bar_index(lastNum)
+    entryPrice = strategy.closedtrades.entry_price(lastNum)
+    entryId    = strategy.closedtrades.entry_id(lastNum)
+    exitBar    = strategy.closedtrades.exit_bar_index(lastNum)
+    exitPrice  = strategy.closedtrades.exit_price(lastNum)
+    exitReason = strategy.closedtrades.exit_comment(lastNum)
+    isLong     = strategy.closedtrades.size(lastNum) > 0
+    tpDist     = tpTicksOf(entryId) * syminfo.mintick
+    slDist     = slTicksOf(entryId) * syminfo.mintick
+    tp = isLong ? entryPrice + tpDist : entryPrice - tpDist
+    sl = isLong ? entryPrice - slDist : entryPrice + slDist
+    if showTradeLines
+        if na(entryLine)
+            // Entry and exit landed on the same bar, so the block above never ran
+            // for this trade: draw the whole picture here from the closed record.
+            entryLine := line.new(entryBar, entryPrice, exitBar, entryPrice, color=entryLineColor, width=tradeLineWidth)
+            tpLine    := line.new(entryBar, tp,         exitBar, tp,         color=tpLineColor, width=tradeLineWidth, style=lineStyle)
+            slLine    := line.new(entryBar, sl,         exitBar, sl,         color=slLineColor, width=tradeLineWidth, style=lineStyle)
+            tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
+            slFill    := linefill.new(entryLine, slLine, color=slFillColor)
+        else
+            line.set_x2(entryLine, exitBar)
+            line.set_x2(tpLine, exitBar)
+            line.set_x2(slLine, exitBar)
+    if showExitLabels
+        isWin = exitReason == "TP"
+        label.new(exitBar, exitPrice, entryId + " " + exitReason,
+             style=isWin ? label.style_label_down : label.style_label_up,
+             color=isWin ? tpLabelColor : slLabelColor,
+             textcolor=color.white, size=size.small)
+    // Trade closed: stop tracking so the next trade starts fresh lines. The lines
+    // already drawn are left on the chart as history.
+    entryLine := na
+    tpLine    := na
+    slLine    := na
+    tpFill    := na
+    slFill    := na
+
+plot(rangeReady and useV3 ? rangeHigh : na, "Range High", color=rangeLineColor, style=plot.style_linebr)
+plot(rangeReady and useV3 ? rangeLow  : na, "Range Low",  color=rangeLineColor, style=plot.style_linebr)
