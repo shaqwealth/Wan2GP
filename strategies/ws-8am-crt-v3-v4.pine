@@ -145,8 +145,9 @@ if strategy.position_size != 0
         line.set_x2(slLine, bar_index)
     // same order id as the bracket sent with the entry, so this refreshes it rather than
     // adding a second one. No qty: the exit closes whatever size the entry filled, V3 or V4.
-    strategy.exit(entryId + " Exit", entryId, profit=isV4 ? tpTicksV4 : tpTicks, loss=isV4 ? slTicksV4 : slTicks,
-         comment_profit="TP", comment_loss="SL")
+    curTp = isV4 ? tpTicksV4 : tpTicks
+    curSl = isV4 ? slTicksV4 : slTicks
+    strategy.exit(entryId + " Exit", entryId, profit=curTp, loss=curSl, comment_profit="TP", comment_loss="SL")
 else if tradeJustClosed
     // A stop/limit fill is applied before this bar's script logic runs, so by the time we
     // get here strategy.position_size is already 0 on the very bar the trade exited. Without
