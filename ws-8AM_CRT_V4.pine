@@ -1,7 +1,12 @@
 //@version=6
+// max_*_count: Pine keeps only the 50 most recent boxes/lines/labels by default and silently
+// deletes older ones. Each day adds a range box + 2 range lines, and each trade adds 2 zones,
+// 3 lines and an exit label, so the defaults are exhausted within ~2 weeks of bars and the
+// TP/SL highlights and exit markers vanish from every older trade.
 strategy("ws-8AM CRT V3+V4 (Funded algo - 5m)", overlay=true,
      default_qty_type=strategy.fixed, default_qty_value=1,
-     initial_capital=100000, currency=currency.USD)
+     initial_capital=100000, currency=currency.USD,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 // ---------------- Inputs ----------------
 sessionRange   = input.session("0800-0900", "Range session", group="Range")
 sessionTZ      = input.string("America/New_York", "Session timezone", group="Range")
@@ -85,10 +90,13 @@ if rangeReady and not inSession
         firstBreakUp := false
         firstBreakDown := true
 // ---------------- V4: opposite-direction trade fired when a V3 trade exits on its stop loss ----------------
+// Detect the close from the closed-trade counter rather than a position_size 0/non-0 edge:
+// when an entry fills at a bar's open and its stop is hit inside that same bar, position_size
+// is 0 both on that bar and the one before, so the edge never appears and V4 silently skips it.
 // Fixed TP/SL are the only way a trade can close here, so a losing trade (profit < 0) can
 // only mean the stop was hit — a more robust signal than matching the exit order's comment text.
-positionJustClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
-if enableV4 and positionJustClosed and strategy.closedtrades > 0
+tradeJustClosed = strategy.closedtrades > nz(strategy.closedtrades[1])
+if enableV4 and tradeJustClosed
     lastNum      = strategy.closedtrades - 1
     lastEntryId  = strategy.closedtrades.entry_id(lastNum)
     wasStopLoss  = strategy.closedtrades.profit(lastNum) < 0
@@ -98,8 +106,7 @@ if enableV4 and positionJustClosed and strategy.closedtrades > 0
         else if lastEntryId == "Short"
             strategy.entry("V4 Long", strategy.long, qty=qtyV4)
 // ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
-// entry/TP/SL lines + shaded zones (boxes render more reliably than linefill between two
-// lines that start at zero width) + a label at the exit price
+// entry/TP/SL lines + shaded entry->TP / entry->SL zones + a label at the exit price
 var line entryLine = na
 var line tpLine    = na
 var line slLine    = na
@@ -130,20 +137,27 @@ if strategy.position_size != 0
         box.set_right(tpZone, bar_index)
         box.set_right(slZone, bar_index)
 
-    strategy.exit(entryId + " Exit", entryId, limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
+    // Constant exit ids: strategy.exit's id is matched against the entry by from_entry, so
+    // there is no need to build it from the series string returned by entry_id().
+    if isV4
+        strategy.exit("V4 Exit", isLong ? "V4 Long" : "V4 Short", limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
+    else
+        strategy.exit("V3 Exit", isLong ? "Long" : "Short", limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
 else
     // A stop/limit fill is applied before this bar's script logic runs, so by the time we
     // get here strategy.position_size is already 0 on the very bar the trade exited. Without
     // this branch the lines/zones would freeze one bar early and never show the exit.
-    if strategy.position_size[1] != 0 and strategy.closedtrades > 0 and not na(entryLine)
+    if tradeJustClosed
         lastNum    = strategy.closedtrades - 1
         exitPrice  = strategy.closedtrades.exit_price(lastNum)
         isWin      = strategy.closedtrades.profit(lastNum) >= 0
-        line.set_x2(entryLine, bar_index)
-        line.set_x2(tpLine, bar_index)
-        line.set_x2(slLine, bar_index)
-        box.set_right(tpZone, bar_index)
-        box.set_right(slZone, bar_index)
+        // A trade entered and stopped out inside one bar never got its lines created.
+        if not na(entryLine)
+            line.set_x2(entryLine, bar_index)
+            line.set_x2(tpLine, bar_index)
+            line.set_x2(slLine, bar_index)
+            box.set_right(tpZone, bar_index)
+            box.set_right(slZone, bar_index)
         if showExitLabels
             label.new(bar_index, exitPrice, isWin ? "TP" : "SL",
                  style=isWin ? label.style_label_down : label.style_label_up,
