@@ -84,6 +84,9 @@ if sessionJustEnded and not na(rangeHigh) and not na(rangeLow)
 beforeCutoff = (hour(time, sessionTZ) * 60 + minute(time, sessionTZ)) < (cutoffHour * 60 + cutoffMinute)
 canTrade = (not oneTradePerDay or not tradeTakenToday) and beforeCutoff
 
+// V3 raw signals: set here, executed further down in the shared entry block.
+v3LongRaw  = false
+v3ShortRaw = false
 if rangeReady and not inSession
     breakUp   = close > rangeHigh
     breakDown = close < rangeLow
@@ -95,16 +98,12 @@ if rangeReady and not inSession
     longCond  = firstBreakDown and breakUp   and canTrade
     shortCond = firstBreakUp   and breakDown and canTrade
     if longCond
-        strategy.entry("Long", strategy.long, qty=qtyV3)
-        // bracket goes in with the entry so it is live on the fill bar itself; profit/loss
-        // are in ticks off the fill price, so they need no reference to the open position.
-        strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        v3LongRaw := true
         tradeTakenToday := true
         firstBreakDown := false
         firstBreakUp := true
     if shortCond
-        strategy.entry("Short", strategy.short, qty=qtyV3)
-        strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
+        v3ShortRaw := true
         tradeTakenToday := true
         firstBreakUp := false
         firstBreakDown := true
@@ -113,21 +112,40 @@ if rangeReady and not inSession
 // counting closed trades (rather than watching position_size[1]) also catches a trade
 // that entered and hit its stop inside a single bar, which never shows a non-flat prior bar.
 tradeJustClosed = strategy.position_size == 0 and strategy.closedtrades > nz(strategy.closedtrades[1])
+v4LongRaw  = false
+v4ShortRaw = false
 if enableV4 and tradeJustClosed
-    // comment_profit/comment_loss below tag each exit, so we can tell a stop-loss exit
-    // apart from a take-profit exit and only reverse on the former.
+    // comment_profit/comment_loss on the bracket tag each exit, so we can tell a stop-loss
+    // exit apart from a take-profit exit and only reverse on the former.
     lastNum         = strategy.closedtrades - 1
     lastEntryId     = strategy.closedtrades.entry_id(lastNum)
     lastExitComment = strategy.closedtrades.exit_comment(lastNum)
     if lastExitComment == "SL"
-        // qtyV4 only: the reversal is sized on its own input, never on the size that the
-        // stopped-out V3 trade happened to fill.
+        // only a V3 trade arms the reversal: a stopped-out V4 is not reversed again.
         if lastEntryId == "Long"
-            strategy.entry("V4 Short", strategy.short, qty=qtyV4)
-            strategy.exit("V4 Short Exit", "V4 Short", profit=tpTicksV4, loss=slTicksV4, comment_profit="TP", comment_loss="SL")
+            v4ShortRaw := true
         else if lastEntryId == "Short"
-            strategy.entry("V4 Long", strategy.long, qty=qtyV4)
-            strategy.exit("V4 Long Exit", "V4 Long", profit=tpTicksV4, loss=slTicksV4, comment_profit="TP", comment_loss="SL")
+            v4LongRaw := true
+
+// ---------------- Entries: one block for V3 and V4 ----------------
+// Every entry goes through this single strategy.entry / strategy.exit pair; which version
+// fired only picks the id, the size and the bracket, exactly like activeQty in the Fair
+// Price script. V3 and V4 therefore stay separately sized without duplicating the orders.
+longSignal  = v3LongRaw  or v4LongRaw
+shortSignal = v3ShortRaw or v4ShortRaw
+if longSignal or shortSignal
+    // V4 takes priority if both fire on the same bar (only reachable with "one trade per
+    // day" off): it reacts to the stop that just filled, and the two would be opposite orders.
+    isV4Entry   = v4LongRaw or v4ShortRaw
+    isLongEntry = isV4Entry ? v4LongRaw : v3LongRaw
+    entryId     = isV4Entry ? (isLongEntry ? "V4 Long" : "V4 Short") : (isLongEntry ? "Long" : "Short")
+    activeQty   = isV4Entry ? qtyV4     : qtyV3
+    activeTp    = isV4Entry ? tpTicksV4 : tpTicks
+    activeSl    = isV4Entry ? slTicksV4 : slTicks
+    strategy.entry(entryId, isLongEntry ? strategy.long : strategy.short, qty=activeQty)
+    // bracket goes in with the entry so it is live on the fill bar itself; profit/loss
+    // are in ticks off the fill price, so they need no reference to the open position.
+    strategy.exit(entryId + " Exit", entryId, profit=activeTp, loss=activeSl, comment_profit="TP", comment_loss="SL")
 
 // ---------------- Time-based flat ----------------
 // Without this a trade sits open until TP or SL is touched, which on a wide bracket can
