@@ -12,6 +12,9 @@ slTicks        = input.int(450, "Stop loss (ticks)", minval=1, group="Risk")
 oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
 cutoffHour     = input.int(11, "No new entries after (hour, session tz)", minval=0, maxval=23, group="Risk")
 cutoffMinute   = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group="Risk")
+useTimeExit    = input.bool(false, "Close any open trade at a fixed time", group="Risk")
+exitHour       = input.int(16, "Close time (hour, session tz)", minval=0, maxval=23, group="Risk")
+exitMinute     = input.int(0, "Close time (minute)", minval=0, maxval=59, group="Risk")
 enableV4       = input.bool(true, "Enable V4 reversal after V3 stop loss", group="V4 Reversal")
 qtyV4          = input.int(1, "V4 order size (contracts)", minval=1, group="V4 Reversal")
 tpTicksV4      = input.int(300, "V4 Take profit (ticks)", minval=1, group="V4 Reversal")
@@ -77,11 +80,15 @@ if rangeReady and not inSession
     shortCond = firstBreakUp   and breakDown and canTrade
     if longCond
         strategy.entry("Long", strategy.long, qty=qtyV3)
+        // bracket goes in with the entry so it is live on the fill bar itself; profit/loss
+        // are in ticks off the fill price, so they need no reference to the open position.
+        strategy.exit("Long Exit", "Long", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         tradeTakenToday := true
         firstBreakDown := false
         firstBreakUp := true
     if shortCond
         strategy.entry("Short", strategy.short, qty=qtyV3)
+        strategy.exit("Short Exit", "Short", profit=tpTicks, loss=slTicks, comment_profit="TP", comment_loss="SL")
         tradeTakenToday := true
         firstBreakUp := false
         firstBreakDown := true
@@ -98,8 +105,17 @@ if enableV4 and tradeJustClosed
     if lastExitComment == "SL"
         if lastEntryId == "Long"
             strategy.entry("V4 Short", strategy.short, qty=qtyV4)
+            strategy.exit("V4 Short Exit", "V4 Short", profit=tpTicksV4, loss=slTicksV4, comment_profit="TP", comment_loss="SL")
         else if lastEntryId == "Short"
             strategy.entry("V4 Long", strategy.long, qty=qtyV4)
+            strategy.exit("V4 Long Exit", "V4 Long", profit=tpTicksV4, loss=slTicksV4, comment_profit="TP", comment_loss="SL")
+// ---------------- Time-based flat ----------------
+// Without this a trade sits open until TP or SL is touched, which on a wide bracket can
+// span several sessions. Off by default so it does not silently change existing results.
+timeToFlat = useTimeExit and (hour(time, sessionTZ) * 60 + minute(time, sessionTZ)) >= (exitHour * 60 + exitMinute)
+if timeToFlat and strategy.position_size != 0
+    // "EOD" (not "SL") so a timed close never arms the V4 reversal.
+    strategy.close_all(comment="EOD")
 // ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
 // entry/TP/SL lines + filled highlight zones (no text labels)
 var line     entryLine = na
@@ -127,8 +143,10 @@ if strategy.position_size != 0
         line.set_x2(entryLine, bar_index)
         line.set_x2(tpLine, bar_index)
         line.set_x2(slLine, bar_index)
-    // no qty here: the exit closes whatever size the entry filled, V3 or V4.
-    strategy.exit(entryId + " Exit", entryId, limit=tp, stop=sl, comment_profit="TP", comment_loss="SL")
+    // same order id as the bracket sent with the entry, so this refreshes it rather than
+    // adding a second one. No qty: the exit closes whatever size the entry filled, V3 or V4.
+    strategy.exit(entryId + " Exit", entryId, profit=isV4 ? tpTicksV4 : tpTicks, loss=isV4 ? slTicksV4 : slTicks,
+         comment_profit="TP", comment_loss="SL")
 else if tradeJustClosed
     // A stop/limit fill is applied before this bar's script logic runs, so by the time we
     // get here strategy.position_size is already 0 on the very bar the trade exited. Without
