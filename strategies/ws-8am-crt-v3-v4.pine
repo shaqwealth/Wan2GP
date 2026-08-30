@@ -28,6 +28,7 @@ slLineColor    = input.color(color.red, "SL line color", group="Display")
 tpFillColor    = input.color(color.new(color.green, 85), "Entry→TP highlight color", group="Display")
 slFillColor    = input.color(color.new(color.red, 85), "Entry→SL highlight color", group="Display")
 tradeLineWidth = input.int(1, "Entry/TP/SL line width", minval=1, maxval=4, group="Display")
+dashV4         = input.bool(true, "Dashed entry/TP/SL lines for V4 trades", group="Display")
 showExitLabels = input.bool(true, "Show exit labels (TP/SL)", group="Display")
 tpLabelColor   = input.color(color.green, "TP exit label color", group="Display")
 slLabelColor   = input.color(color.red, "SL exit label color", group="Display")
@@ -123,6 +124,9 @@ var line     tpLine    = na
 var line     slLine    = na
 var linefill tpFill    = na
 var linefill slFill    = na
+// entry bar of the trade the lines above belong to. Keying the redraw on it means a new
+// trade always gets its own lines, even if the reset in the closing branch was missed.
+var int      drawnBar  = na
 if strategy.position_size != 0
     entryBar   = strategy.opentrades.entry_bar_index(0)
     entryPrice = strategy.opentrades.entry_price(0)
@@ -133,10 +137,12 @@ if strategy.position_size != 0
     curSlDist  = isV4 ? slDistV4 : slDist
     tp = isLong ? entryPrice + curTpDist : entryPrice - curTpDist
     sl = isLong ? entryPrice - curSlDist : entryPrice + curSlDist
-    if na(entryLine)
-        entryLine := line.new(entryBar, entryPrice, bar_index, entryPrice, color=entryLineColor, width=tradeLineWidth)
-        tpLine    := line.new(entryBar, tp,          bar_index, tp,          color=tpLineColor, width=tradeLineWidth)
-        slLine    := line.new(entryBar, sl,          bar_index, sl,          color=slLineColor, width=tradeLineWidth)
+    lineStyle = isV4 and dashV4 ? line.style_dashed : line.style_solid
+    if na(entryLine) or nz(drawnBar, -1) != entryBar
+        drawnBar  := entryBar
+        entryLine := line.new(entryBar, entryPrice, bar_index, entryPrice, color=entryLineColor, width=tradeLineWidth, style=lineStyle)
+        tpLine    := line.new(entryBar, tp,          bar_index, tp,          color=tpLineColor, width=tradeLineWidth, style=lineStyle)
+        slLine    := line.new(entryBar, sl,          bar_index, sl,          color=slLineColor, width=tradeLineWidth, style=lineStyle)
         tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
         slFill    := linefill.new(entryLine, slLine, color=slFillColor)
     else
@@ -163,12 +169,14 @@ else if tradeJustClosed
     isLong     = strategy.closedtrades.size(lastNum) > 0
     tp = isLong ? entryPrice + (isV4 ? tpDistV4 : tpDist) : entryPrice - (isV4 ? tpDistV4 : tpDist)
     sl = isLong ? entryPrice - (isV4 ? slDistV4 : slDist) : entryPrice + (isV4 ? slDistV4 : slDist)
-    if na(entryLine)
+    lineStyle = isV4 and dashV4 ? line.style_dashed : line.style_solid
+    if na(entryLine) or nz(drawnBar, -1) != entryBar
         // entry and exit landed on the same bar, so the block above never ran for this
         // trade: draw the whole picture here from the closed-trade record.
-        entryLine := line.new(entryBar, entryPrice, exitBar, entryPrice, color=entryLineColor, width=tradeLineWidth)
-        tpLine    := line.new(entryBar, tp,         exitBar, tp,         color=tpLineColor, width=tradeLineWidth)
-        slLine    := line.new(entryBar, sl,         exitBar, sl,         color=slLineColor, width=tradeLineWidth)
+        drawnBar  := entryBar
+        entryLine := line.new(entryBar, entryPrice, exitBar, entryPrice, color=entryLineColor, width=tradeLineWidth, style=lineStyle)
+        tpLine    := line.new(entryBar, tp,         exitBar, tp,         color=tpLineColor, width=tradeLineWidth, style=lineStyle)
+        slLine    := line.new(entryBar, sl,         exitBar, sl,         color=slLineColor, width=tradeLineWidth, style=lineStyle)
         tpFill    := linefill.new(entryLine, tpLine, color=tpFillColor)
         slFill    := linefill.new(entryLine, slLine, color=slFillColor)
     else
