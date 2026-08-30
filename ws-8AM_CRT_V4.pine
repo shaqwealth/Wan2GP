@@ -7,12 +7,14 @@ sessionRange   = input.session("0800-0900", "Range session", group="Range")
 sessionTZ      = input.string("America/New_York", "Session timezone", group="Range")
 tpTicks        = input.int(450, "Take profit (ticks)", minval=1, group="Risk")
 slTicks        = input.int(450, "Stop loss (ticks)", minval=1, group="Risk")
+qtyV3          = input.int(2, "V3 contracts", minval=1, group="Risk")
 oneTradePerDay = input.bool(true, "One trade per day", group="Risk")
 cutoffHour     = input.int(11, "No new entries after (hour, session tz)", minval=0, maxval=23, group="Risk")
 cutoffMinute   = input.int(0, "No new entries after (minute)", minval=0, maxval=59, group="Risk")
 enableV4       = input.bool(true, "Enable V4 reversal after V3 stop loss", group="V4 Reversal")
 tpTicksV4      = input.int(300, "V4 Take profit (ticks)", minval=1, group="V4 Reversal")
 slTicksV4      = input.int(200, "V4 Stop loss (ticks)", minval=1, group="V4 Reversal")
+qtyV4          = input.int(4, "V4 contracts", minval=1, group="V4 Reversal")
 showRange      = input.bool(true, "Show range box", group="Display")
 rangeLineColor = input.color(color.gray, "Range line color", group="Display")
 rangeLineWidth = input.int(1, "Range line width", minval=1, maxval=4, group="Display")
@@ -73,12 +75,12 @@ if rangeReady and not inSession
     longCond  = firstBreakDown and breakUp   and canTrade
     shortCond = firstBreakUp   and breakDown and canTrade
     if longCond
-        strategy.entry("Long", strategy.long)
+        strategy.entry("Long", strategy.long, qty=qtyV3)
         tradeTakenToday := true
         firstBreakDown := false
         firstBreakUp := true
     if shortCond
-        strategy.entry("Short", strategy.short)
+        strategy.entry("Short", strategy.short, qty=qtyV3)
         tradeTakenToday := true
         firstBreakUp := false
         firstBreakDown := true
@@ -92,9 +94,9 @@ if enableV4 and positionJustClosed and strategy.closedtrades > 0
     wasStopLoss  = strategy.closedtrades.profit(lastNum) < 0
     if wasStopLoss
         if lastEntryId == "Long"
-            strategy.entry("V4 Short", strategy.short)
+            strategy.entry("V4 Short", strategy.short, qty=qtyV4)
         else if lastEntryId == "Short"
-            strategy.entry("V4 Long", strategy.long)
+            strategy.entry("V4 Long", strategy.long, qty=qtyV4)
 // ---------------- Exits: fixed TP/SL in ticks off the average fill ----------------
 // entry/TP/SL lines + shaded zones (boxes render more reliably than linefill between two
 // lines that start at zero width) + a label at the exit price
