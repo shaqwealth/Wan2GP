@@ -48,14 +48,15 @@ AsiaBackgroundColor = input.color(defaultAsiaColor, title = "", group = grpS, in
 // Every call site of this function keeps its own `var` state, so one call
 // per session is all that is needed to track / draw / prune that session.
 drawSession(bool enabled, string sess, color borderCol, color bgCol, string txt) =>
-    var box       activeBox = na
-    var array<box> boxes    = array.new<box>()
-    var float     sessHigh  = na
-    var float     sessLow   = na
+    var box        activeBox = na
+    var array<box> boxes     = array.new<box>()
+    var float      sessHigh  = na
+    var float      sessLow   = na
+    var bool       prevIn    = false
 
     bool inSess  = enabled and not na(time(timeframe.period, sess, tz))
-    bool prevIn  = na(inSess[1]) ? false : inSess[1]
     bool newSess = inSess and not prevIn
+    prevIn := inSess
 
     if newSess
         sessHigh  := high
