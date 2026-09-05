@@ -2,7 +2,7 @@
 // ws-killzones — Session / Killzone highlighter
 // Draws a high-low box around the Paris, London, New York and Asia sessions,
 // plus up to four extra background-highlighted time windows.
-indicator("ws-killzones", shorttitle = "ws-killzones", overlay = true, max_boxes_count = 500, max_labels_count = 500)
+indicator("ws-killzones", shorttitle = "ws-killzones", overlay = true, max_boxes_count = 500)
 
 // ═════════════════════════════ Sessions ═════════════════════════════
 grpS = "Sessions"
@@ -11,7 +11,9 @@ grpA = "Additional Sessions"
 maxBoxCount = input.int(5, title = "Maximum box count", minval = 1, maxval = 500, group = grpS,
   tooltip = "How many past session boxes to keep on the chart, per session.")
 lineWidth   = input.int(1, title = "Line width", minval = 0, maxval = 4, group = grpS)
-showLabels  = input.bool(false, title = "Show session labels", group = grpS)
+showLabels  = input.bool(false, title = "Show session labels", group = grpS, inline = "lbl")
+labelColor  = input.color(color.gray, title = "", group = grpS, inline = "lbl",
+  tooltip = "The name is drawn inside the session box, so it stays attached to it.")
 
 useCustomTz = input.bool(false, title = "Use custom time zone", group = grpS, inline = "tz")
 customTz    = input.string("America/New_York", title = "", group = grpS, inline = "tz",
@@ -63,12 +65,9 @@ drawSession(bool enabled, string sess, color borderCol, color bgCol, string txt)
         sessLow   := low
         activeBox := box.new(time, sessHigh, time_close, sessLow, xloc = xloc.bar_time,
           border_color = borderCol, border_width = lineWidth, border_style = line.style_solid,
-          bgcolor = bgCol)
+          bgcolor = bgCol, text = showLabels ? txt : "", text_color = labelColor,
+          text_halign = text.align_center, text_valign = text.align_top, text_size = size.small)
         array.push(boxes, activeBox)
-        if showLabels
-            label.new(time, sessHigh, txt, xloc = xloc.bar_time, yloc = yloc.price,
-              style = label.style_label_down, textcolor = color.new(borderCol, 0),
-              color = color.new(color.black, 100), size = size.small)
         // Keep only the most recent `maxBoxCount` boxes, on every timeframe.
         while array.size(boxes) > maxBoxCount
             box.delete(array.shift(boxes))

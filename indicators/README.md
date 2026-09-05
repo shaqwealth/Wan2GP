@@ -16,7 +16,7 @@ four extra time windows.
 |---|---|---|
 | Sessions | Maximum box count | Past boxes kept per session (applies on every timeframe) |
 | Sessions | Line width | Box border width |
-| Sessions | Show session labels | Optional name label at each session start |
+| Sessions | Show session labels | Draws the session name inside its box, top-centre, with the colour picked beside the toggle |
 | Sessions | Use custom time zone | Off = exchange time; on = the IANA zone you type (e.g. `America/New_York`) |
 | Sessions | Paris / London / New York / Asia | Enable, session time, border colour, background colour |
 | Additional Sessions | Trading Session 1-4 | `bgcolor` highlight with its own colour and transparency |
