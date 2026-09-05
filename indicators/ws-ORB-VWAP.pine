@@ -1,0 +1,1666 @@
+//@version=6
+indicator("ws-ORB + VWAP's", overlay = true, scale = scale.right, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs - Table
+// ─────────────────────────────────────────────────────────────────────────────
+grpTable = "Table"
+tickerSym = input.symbol("", "Ticker", group = grpTable, tooltip = "Select ticker (empty = chart symbol)")
+tickerStr = tickerSym == "" ? syminfo.tickerid : str.tostring(tickerSym)
+tickerPair = str.split(tickerStr, ":")
+displayTicker = array.size(tickerPair) > 1 ? array.get(tickerPair, 1) : tickerStr
+
+grpTableDisplay = "Table display"
+tablePosition   = input.string("Bottom Right", "Position", group = grpTableDisplay, options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"])
+tableSize       = input.string("Normal", "Size", group = grpTableDisplay, options = ["Tiny", "Small", "Normal", "Large"])
+tableLayout     = input.string("Horizontal", "Layout", group = grpTableDisplay, options = ["Horizontal", "Vertical"])
+tblColABgColor = input.color(color.new(color.black, 10), "Column A bg", group = grpTableDisplay)
+tblColBBgColor = input.color(color.new(color.black, 10), "Column B bg", group = grpTableDisplay)
+tblHeaderColor = input.color(color.white, "Header text (column A)", group = grpTableDisplay)
+tblValueColor  = input.color(color.white, "Value text (column B)", group = grpTableDisplay)
+tblInsideColor = input.color(color.white, "Inside / Not engaged", group = grpTableDisplay, tooltip = "Color for Inside and Not engaged statuses")
+tblNaColor     = input.color(color.gray, "NA/Empty text", group = grpTableDisplay)
+tblBorderWidth  = input.int(1, "Cell border width", minval = 0, maxval = 4, group = grpTableDisplay, tooltip = "Width of lines between table cells (0 = none).")
+tblBorderColor  = input.color(color.new(color.gray, 0), "Cell border color", group = grpTableDisplay)
+
+grpCols = "Table columns (show/hide)"
+showColTicker           = input.bool(true, "Ticker", group = grpCols, inline = "c1")
+showColOpeningRange     = input.bool(true, "Opening Range", group = grpCols, inline = "c1")
+showColOpeningRange5m   = input.bool(true, "Opening Range II", group = grpCols, inline = "c1")
+showColOrbSize          = input.bool(true, "ORB size (%)", group = grpCols, inline = "c1", tooltip = "Opening Range (15m) size as % of OR low: (ORH-ORL)/ORL*100")
+showColFormedFirst      = input.bool(true, "Formed first", group = grpCols, inline = "c1", tooltip = "Which formed first inside the 15m Opening Range: High (green) or Low (red)")
+showColIBRange          = input.bool(true, "Initial Balance", group = grpCols, inline = "c1", tooltip = "9:30-10:30; same status logic as Opening Range")
+showColIBSize           = input.bool(true, "IB size (%)", group = grpCols, inline = "c1", tooltip = "Initial Balance range as % of IB low: (IBH-IBL)/IBL*100")
+showColIBFormedFirst    = input.bool(true, "IB formed first", group = grpCols, inline = "c1", tooltip = "Which formed first in the IB window: High (green) or Low (red); 1m-based")
+showColTrend            = input.bool(true, "Trend", group = grpCols, inline = "c1")
+showColBidOffer         = input.bool(true, "Bid/Offer", group = grpCols, inline = "c1", tooltip = "Yes=above/below both; End of Bid/Offer=first opposite; -=mixed")
+showColNYVWAP           = input.bool(true, "NY VWAP", group = grpCols, inline = "c2")
+showColOvernightVWAP    = input.bool(true, "Overnight VWAP", group = grpCols, inline = "c2")
+showColGapType          = input.bool(true, "Gap Type", group = grpCols, inline = "c3")
+showColGapPct           = input.bool(true, "Gap %", group = grpCols, inline = "c3")
+showColPriorDay         = input.bool(true, "Prior day", group = grpCols, inline = "c3")
+showCol8amCandle        = input.bool(true, "8AM Candle", group = grpCols, inline = "c3", tooltip = "9AM-1PM: break 8AM 1H candle (same on any timeframe)")
+showColMidnightOpen     = input.bool(true, "Midnight open", group = grpCols, inline = "c4")
+showColPDNYVWAP         = input.bool(true, "PD NY VWAP", group = grpCols, inline = "c4", tooltip = "200 EMA (5m): above = 🟢, below = 🔴")
+showColICTOpening       = input.bool(true, "ICT opening", group = grpCols, inline = "c5", tooltip = "🟢 if 9:45 open > 6:00 open, 🔴 if below")
+showColC2               = input.bool(true, "C2", group = grpCols, inline = "c5", tooltip = "Range 0:00-6:00 AM: outside (break high/low) = green, inside = blue")
+showCol6amOpen          = input.bool(true, "ICT opening %", group = grpCols, inline = "c6", tooltip = "Shows the % difference between the 9:45 AM open and the 6:00 AM open")
+showColORBStats         = input.bool(true, "ORB stats", group = grpCols, tooltip = "Merged label row (vertical layout only)")
+showColIBStats          = input.bool(true, "IB stats", group = grpCols, tooltip = "Merged label row (vertical layout only)")
+
+grpTime = "Opening Range Session"
+orSession = input.session("0930-0945", "Range 15m (9:30-9:45)", group = grpTime)
+orSession5m = input.session("0930-0935", "Range 5m (9:30-9:35)", group = grpTime)
+ibRangeSession = input.session("0930-1030", "Initial Balance (9:30-10:30)", group = grpTime, tooltip = "Initial Balance window; same Single/Double/Inside logic as Opening Range")
+timeZone  = input.string("America/New_York", "Timezone", group = grpTime)
+
+beforeOROpen = not na(time(timeframe.period, "0000-0929", timeZone))
+
+grpGap = "Gap"
+useGapPctThreshold = input.bool(true, "Use % threshold for Flat Open", group = grpGap)
+gapThresholdPct = input.float(0.1, "Threshold %", group = grpGap, minval = 0.0, step = 0.01, tooltip = "Flat when |gap %| <= this (e.g. 0.1 = 0.1%)")
+gapThreshold = input.float(0.10, "Threshold (price)", group = grpGap, minval = 0.0, step = 0.01, tooltip = "Used if not using % threshold")
+
+// VWAP constants (no bands)
+color vwap1_color = #44ad5b
+color vwap2_color = #4469ad
+
+grpVWAP = "Volume Weighted Average Price"
+vwapSource   = input.source(hlc3, "Source", group = grpVWAP)
+vwapTz       = input.string("Etc/GMT+5", "VWAP Timezone", group = grpVWAP, tooltip = "e.g. America/New_York or Etc/GMT+5")
+vwap1Session = input.session("0930-1600", "VWAP 1 session", group = grpVWAP, tooltip = "Custom hours for first VWAP (e.g. NY RTH 9:30–16:00)")
+vwap2Session = input.session("1700-0930", "VWAP 2 session", group = grpVWAP, tooltip = "Custom hours for second VWAP (e.g. Overnight 17:00–next 9:30)")
+beforeVwap1Session = input.session("0000-0929", "Before VWAP 1 open", group = grpVWAP, tooltip = "When to show '—' in table (e.g. 0000-0929 = before 9:30)")
+use5mCalc    = input.bool(true, "Calc VWAP on 5m (fixes floating on daily+)", group = grpVWAP, tooltip = "Use 5m bars for VWAP so it anchors to price on any chart timeframe")
+
+grpSession = "Session"
+showVwapsOnChart = input.bool(true, "Show VWAPs", group = grpSession, tooltip = "Master toggle for VWAP lines. Turn off with 9 EMA on for EMA-only chart.")
+showVwap1 = input.bool(true, "VWAP 1", inline = "s0", group = grpSession)
+vwap1Color = input.color(vwap1_color, "", inline = "s0", group = grpSession)
+showVwap2 = input.bool(true, "VWAP 2", inline = "s1", group = grpSession)
+vwap2Color = input.color(vwap2_color, "", inline = "s1", group = grpSession)
+showEma9 = input.bool(true, "Show 9 EMA", inline = "s2", group = grpSession, tooltip = "9-period EMA on the chart timeframe. Turn off Show VWAPs for EMA-only; turn this off for VWAP-only chart.")
+ema9Color = input.color(color.new(#f7931a, 0), "", inline = "s2", group = grpSession)
+ema9Width = input.int(2, "9 EMA width", minval = 1, maxval = 4, group = grpSession)
+
+// Midnight Open (ICT style)
+grpMid = "Midnight Open"
+midSessionInput   = input.session('0000-0001:1234567', "New York Midnight", group = grpMid, tooltip = "Exchange time may differ; adjust session.")
+midTzInput        = input.string("GMT-5", "Timezone", group = grpMid)
+midShowLine       = input.bool(true, "Show line", group = grpMid, inline = "m1")
+midLineColor      = input.color(#0064ff, "", group = grpMid, inline = "m1")
+midLineStyleStr   = input.string("Dotted", "Style", options = ["Solid", "Dotted", "Dashed"], group = grpMid, inline = "m2")
+midLineWidth      = input.int(2, "Width", minval = 1, maxval = 10, group = grpMid, inline = "m2")
+midExtendMode     = input.string("1 Day", "Extend", options = ["1 Day", "2 Days", "Right", "Both"], group = grpMid, inline = "m3")
+midExtendByHours  = input.bool(false, "", group = grpMid, inline = "m3")
+midExtendHours    = input.int(3, "Hours", minval = 1, maxval = 23, group = grpMid, inline = "m3")
+midLabelTextCol   = input.color(color.white, "Label text", group = grpMid, inline = "m4")
+midLabelBgCol     = input.color(color.new(color.blue, 0), "Label bg", group = grpMid, inline = "m4")
+midLabelSizeStr   = input.string("Tiny", "Label size", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = grpMid, inline = "m5")
+midLabelYPos      = input.string("On line", "Label pos", options = ["On line", "Above", "Below"], group = grpMid, inline = "m6")
+midLabelOffsetTicks = input.int(10, "Offset (ticks)", minval = 0, group = grpMid, inline = "m6", tooltip = "Distance above/below the line in ticks")
+
+midLabelSize = midLabelSizeStr == "Tiny" ? size.tiny : midLabelSizeStr == "Small" ? size.small : midLabelSizeStr == "Large" ? size.large : midLabelSizeStr == "Huge" ? size.huge : size.normal
+midLabelOffset = midLabelOffsetTicks * syminfo.mintick
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Key levels (prior day / week / month H & L)
+// ─────────────────────────────────────────────────────────────────────────────
+grpKeyLevels = "Key levels"
+kl_enabled = input.bool(true, "Enable Key levels", group = grpKeyLevels)
+chk_kl_yh = input.bool(true, "PD.H", group = grpKeyLevels, inline = "kl1")
+chk_kl_yl = input.bool(true, "PD.L", group = grpKeyLevels, inline = "kl1")
+chk_kl_lwh = input.bool(true, "PWH", group = grpKeyLevels, inline = "kl2")
+chk_kl_lwl = input.bool(true, "PWL", group = grpKeyLevels, inline = "kl2")
+chk_kl_lmh = input.bool(true, "PMH", group = grpKeyLevels, inline = "kl3")
+chk_kl_lml = input.bool(true, "PML", group = grpKeyLevels, inline = "kl3")
+kl_bar_num = input.int(1, "Candles to show line", minval = 1, group = grpKeyLevels, tooltip = "Number of candlesticks to look back to draw line")
+kl_show_labels = input.bool(true, "Show labels", group = grpKeyLevels)
+kl_size_labels = input.string("normal", "Label size", options = ["large", "normal", "small"], group = grpKeyLevels)
+kl_color_labels = input.color(#787b86, "Label color", group = grpKeyLevels)
+kl_label_position = input.int(2, "Label position (bars right)", minval = 0, maxval = 50, group = grpKeyLevels, tooltip = "When increasing number, labels move right")
+
+kl_lbl_size = kl_size_labels == "large" ? size.large : kl_size_labels == "small" ? size.small : size.normal
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional Sessions (background highlight)
+// ─────────────────────────────────────────────────────────────────────────────
+grpAddSess = "Additional Sessions"
+addSessTzInp = input.string("", "Sessions timezone", group = grpAddSess, tooltip = "Empty = symbol exchange timezone (syminfo.timezone). Otherwise e.g. America/New_York.")
+addSessTzResolved = addSessTzInp == "" ? syminfo.timezone : addSessTzInp
+
+is_trading_session = input.bool(false, "Highlight trading session 1?", group = grpAddSess)
+trading_session = input.session("0850-0910", "Trading session 1 (exchange time)", group = grpAddSess)
+trading_session_color = input.color(color.yellow, "Session 1 color", group = grpAddSess)
+trading_session_transp = input.int(90, "Session 1 transparency", minval = 0, maxval = 100, group = grpAddSess)
+
+is_trading_session2 = input.bool(false, "Highlight trading session 2?", group = grpAddSess)
+trading_session2 = input.session("0950-1010", "Trading session 2 (exchange time)", group = grpAddSess)
+trading_session2_color = input.color(color.blue, "Session 2 color", group = grpAddSess)
+trading_session2_transp = input.int(90, "Session 2 transparency", minval = 0, maxval = 100, group = grpAddSess)
+
+is_trading_session3 = input.bool(false, "Highlight trading session 3?", group = grpAddSess)
+trading_session3 = input.session("1050-1110", "Trading session 3 (exchange time)", group = grpAddSess)
+trading_session3_color = input.color(color.yellow, "Session 3 color", group = grpAddSess)
+trading_session3_transp = input.int(90, "Session 3 transparency", minval = 0, maxval = 100, group = grpAddSess)
+
+is_trading_session4 = input.bool(false, "Highlight trading session 4?", group = grpAddSess)
+trading_session4 = input.session("1150-1210", "Trading session 4 (exchange time)", group = grpAddSess)
+trading_session4_color = input.color(color.blue, "Session 4 color", group = grpAddSess)
+trading_session4_transp = input.int(90, "Session 4 transparency", minval = 0, maxval = 100, group = grpAddSess)
+// ─────────────────────────────────────────────────────────────────────────────
+// IB (Initial Balance) — history version (keeps last N sessions)
+// ─────────────────────────────────────────────────────────────────────────────
+grpIB = "SESSION & INITIAL BALANCE"
+ib_enabled = input.bool(true, "Enable Initial Balance", group = grpIB)
+ib_duration = input.string(defval='14 MINS', options=['1 MIN', '5 MINS', '10 MINS', '14 MINS', '15 MINS', '30 MINS', '1 HOUR'], title='Initial Balance Duration', group=grpIB)
+ib_session_type = input.string(defval='Day Session (RTH)', options=['Day Session (RTH)', 'Overnight Session (ON)', 'FX-Tokyo', 'FX-London', 'FX-New York', 'Custom'],
+  title='Select Session Type', group=grpIB)
+ib_custom_session_times_inp = input.session(defval="0830-1500", title = 'Custom Session', group=grpIB)
+ib_session_timezone = input.string("America/New_York", "IB Session Timezone", group=grpIB)
+
+grpIBLines = "IB — LINES, WIDTHS AND COLORS"
+ib_showIBlines = input.bool(title='Initial Balance Lines', defval=true, inline='ib', group=grpIBLines)
+ib_colorIBlines = input.color(title='', defval=color.black, inline='ib', group=grpIBLines)
+ib_widthIBlines = input.int(title='', defval=2, inline='ib', group=grpIBLines)
+
+ib_showIBbox = input.bool(title='Initial Balance Fill', defval=true, inline='ibbox', group=grpIBLines)
+ib_colorIBbox = input.color(title='', defval=color.new(color.blue, 93), inline='ibbox', group=grpIBLines)
+
+ib_showOpenRangeBox = input.bool(title='Highlight Open Range (1st bar)', defval=true, inline='orbox', group=grpIBLines, tooltip='First 1m bar of IB session (high–low). Follows IB session type/timezone.')
+ib_colorORbox = input.color(title='', defval=color.new(color.blue, 90), inline='orbox', group=grpIBLines)
+
+ib_showFairPriceBox = input.bool(title='Highlight open range of 9:29 (Fair price)', defval=true, inline='fpbox', group=grpIBLines, tooltip='1m bar before IB session open — body only (open–close), wicks excluded. Follows IB session type/timezone.')
+ib_colorFairPriceBox = input.color(title='', defval=color.new(color.orange, 85), inline='fpbox', group=grpIBLines)
+
+ib_showMidLine = input.bool(title='Middle Initial Balance Line', defval=true, inline='ibmid', group=grpIBLines)
+ib_colorMidLine = input.color(title='', defval=color.black, inline='ibmid', group=grpIBLines)
+ib_widthMidLine = input.int(title='', defval=1, inline='ibmid', group=grpIBLines)
+
+ib_show50extLines = input.bool(title='50% IB-range extension lines', defval=false, inline='50ext', group=grpIBLines)
+ib_color50extLine = input.color(title='', defval=color.black, inline='50ext', group=grpIBLines)
+ib_width50extLines = input.int(title='', defval=1, inline='50ext', group=grpIBLines)
+
+ib_show100extLines = input.bool(title='100% IB-range extension lines', defval=true, inline='100ext', group=grpIBLines)
+ib_color100extLine = input.color(title='', defval=color.black, inline='100ext', group=grpIBLines)
+ib_width100extLines = input.int(title='', defval=1, inline='100ext', group=grpIBLines)
+
+ib_show200extLines = input.bool(title='200% IB-range extension lines', defval=true, inline='200ext', group=grpIBLines)
+ib_color200extLine = input.color(title='', defval=color.black, inline='200ext', group=grpIBLines)
+ib_width200extLines = input.int(title='', defval=1, inline='200ext', group=grpIBLines)
+
+grpIBMore = "IB — MORE SETTINGS"
+ib_ndays = input.int(5, "Show IB history (days)", minval = 1, maxval = 50, group = grpIBMore)
+ib_showLabels = input.bool(true, title='Show Labels', inline='labels', group=grpIBMore)
+ib_label_size_str = input.string('small', options=['auto', 'tiny', 'small', 'normal', 'large', 'huge'], title='- size', inline='labels', group=grpIBMore)
+ib_display_value = input.bool(true, title='Show Price Values in Labels', group=grpIBMore)
+ib_nbarsforward = input.int(title='Offset labels N bars to the right', defval=20, group=grpIBMore)
+
+ib_label_size =
+     ib_label_size_str == 'tiny' ? size.tiny :
+     ib_label_size_str == 'small' ? size.small :
+     ib_label_size_str == 'normal' ? size.normal :
+     ib_label_size_str == 'large' ? size.large :
+     ib_label_size_str == 'huge' ? size.huge : size.auto
+
+ib_duration_ms =
+     ib_duration == '1 MIN' ? 60000 :
+     ib_duration == '5 MINS' ? 300000 :
+     ib_duration == '10 MINS' ? 600000 :
+     ib_duration == '14 MINS' ? 840000 :
+     ib_duration == '15 MINS' ? 900000 :
+     ib_duration == '30 MINS' ? 1800000 : 3600000
+
+nround(x) =>
+    math.round(x / syminfo.mintick) * syminfo.mintick
+
+ib_getSessionTimes(_type, _custom) =>
+    string sess =
+         _type == 'Day Session (RTH)' ? '0930-1600' :
+         _type == 'Overnight Session (ON)' ? '1700-0930' :
+         _type == 'FX-Tokyo' ? '1900-0400' :
+         _type == 'FX-London' ? '0300-1200' :
+         _type == 'FX-New York' ? '0800-1700' :
+         _custom
+    sess
+
+f_trim_lines(arr, keep) =>
+    while array.size(arr) > keep
+        line.delete(array.shift(arr))
+
+f_trim_boxes(arr, keep) =>
+    while array.size(arr) > keep
+        box.delete(array.shift(arr))
+
+f_trim_labels(arr, keep) =>
+    while array.size(arr) > keep
+        label.delete(array.shift(arr))
+
+ib_session_times = ib_getSessionTimes(ib_session_type, ib_custom_session_times_inp)
+ib_inSession = not na(time(timeframe.period, ib_session_times, ib_session_timezone))
+ib_sessionStart = ib_inSession and (barstate.isfirst or not ib_inSession[1])
+ib_sessionEnd = (not ib_inSession) and ib_inSession[1]
+
+// IB open-range bars on 1m — follow session type / custom session / timezone
+calcIBOpenBars1m() =>
+    inIB = not na(time("1", ib_session_times, ib_session_timezone))
+    ibStart1m = inIB and (barstate.isfirst or not inIB[1])
+    float orHi = na
+    float orLo = na
+    int orTime = na
+    float fpTop = na
+    float fpBot = na
+    int fpTime = na
+    if ibStart1m
+        orHi := high
+        orLo := low
+        orTime := time
+        fpTop := math.max(open[1], close[1])
+        fpBot := math.min(open[1], close[1])
+        fpTime := time[1]
+    [orHi, orLo, orTime, fpTop, fpBot, fpTime]
+
+[ib_or1mHi, ib_or1mLo, ib_or1mTime, ib_fpBodyTop, ib_fpBodyBot, ib_fpBarTime] = request.security(syminfo.tickerid, "1", calcIBOpenBars1m(), gaps = barmerge.gaps_off)
+ib_or1mBarNew = ib_enabled and ib_showOpenRangeBox and timeframe.isintraday and not na(ib_or1mTime) and ib_or1mTime != nz(ib_or1mTime[1], ib_or1mTime - 1)
+ib_fpBarNew = ib_enabled and ib_showFairPriceBox and timeframe.isintraday and not na(ib_fpBarTime) and ib_fpBarTime != nz(ib_fpBarTime[1], ib_fpBarTime - 1)
+
+// IB state (current session only)
+var int   ib_startTime = na
+var float ib_hi = na
+var float ib_lo = na
+
+// Current-session ids (so we can update while session is live)
+var line  ib_hi_line = na
+var line  ib_lo_line = na
+var line  ib_mid_line = na
+var line  ib_hi_50_line = na
+var line  ib_lo_50_line = na
+var line  ib_hi_100_line = na
+var line  ib_lo_100_line = na
+var line  ib_hi_200_line = na
+var line  ib_lo_200_line = na
+var box   ib_box = na
+var box   ib_or_box = na
+var box   ib_fp_box = na
+var label ib_lbl_hi = na
+var label ib_lbl_lo = na
+var label ib_lbl_mid = na
+var label ib_lbl_hi_100 = na
+var label ib_lbl_lo_100 = na
+var label ib_lbl_hi_200 = na
+var label ib_lbl_lo_200 = na
+
+// History arrays (keep last N sessions)
+var ib_hist_hi_lines  = array.new_line()
+var ib_hist_lo_lines  = array.new_line()
+var ib_hist_mid_lines = array.new_line()
+var ib_hist_ext_lines = array.new_line()
+var ib_hist_boxes     = array.new_box()
+var ib_hist_or_boxes  = array.new_box()
+var ib_hist_fp_boxes  = array.new_box()
+var ib_hist_labels    = array.new_label()
+
+if ib_or1mBarNew
+    ib_or_box := box.new(ib_or1mTime, ib_or1mHi, ib_or1mTime + 60000, ib_or1mLo, xloc = xloc.bar_time, border_color = ib_colorORbox, bgcolor = ib_colorORbox, extend = extend.right)
+    array.push(ib_hist_or_boxes, ib_or_box)
+    f_trim_boxes(ib_hist_or_boxes, ib_ndays)
+
+if ib_fpBarNew
+    ib_fp_box := box.new(ib_fpBarTime, ib_fpBodyTop, ib_fpBarTime + 60000, ib_fpBodyBot, xloc = xloc.bar_time, border_color = ib_colorFairPriceBox, bgcolor = ib_colorFairPriceBox, border_width = 0, extend = extend.right)
+    array.push(ib_hist_fp_boxes, ib_fp_box)
+    f_trim_boxes(ib_hist_fp_boxes, ib_ndays)
+
+// Start new IB session: create and store objects (DO NOT delete yesterday)
+if ib_enabled and timeframe.isintraday and ib_sessionStart
+    ib_startTime := time
+    ib_hi := high
+    ib_lo := low
+
+    if ib_showIBlines
+        ib_hi_line := line.new(bar_index, ib_hi, bar_index + 1, ib_hi, color=ib_colorIBlines, width=ib_widthIBlines, extend=extend.right)
+        ib_lo_line := line.new(bar_index, ib_lo, bar_index + 1, ib_lo, color=ib_colorIBlines, width=ib_widthIBlines, extend=extend.right)
+        array.push(ib_hist_hi_lines, ib_hi_line)
+        array.push(ib_hist_lo_lines, ib_lo_line)
+
+    if ib_showMidLine
+        midv = (ib_hi + ib_lo) / 2.0
+        ib_mid_line := line.new(bar_index, midv, bar_index + 1, midv, color=ib_colorMidLine, width=ib_widthMidLine, style=line.style_dotted, extend=extend.right)
+        array.push(ib_hist_mid_lines, ib_mid_line)
+
+    if ib_showIBbox
+        ib_box := box.new(bar_index, ib_hi, bar_index + 1, ib_lo, border_color=ib_colorIBbox, bgcolor=ib_colorIBbox, extend=extend.right)
+        array.push(ib_hist_boxes, ib_box)
+
+    if ib_show50extLines
+        ib_hi_50_line := line.new(bar_index, na, bar_index + 1, na, color=ib_color50extLine, width=ib_width50extLines, extend=extend.right)
+        ib_lo_50_line := line.new(bar_index, na, bar_index + 1, na, color=ib_color50extLine, width=ib_width50extLines, extend=extend.right)
+        array.push(ib_hist_ext_lines, ib_hi_50_line)
+        array.push(ib_hist_ext_lines, ib_lo_50_line)
+
+    if ib_show100extLines
+        ib_hi_100_line := line.new(bar_index, na, bar_index + 1, na, color=ib_color100extLine, width=ib_width100extLines, extend=extend.right)
+        ib_lo_100_line := line.new(bar_index, na, bar_index + 1, na, color=ib_color100extLine, width=ib_width100extLines, extend=extend.right)
+        array.push(ib_hist_ext_lines, ib_hi_100_line)
+        array.push(ib_hist_ext_lines, ib_lo_100_line)
+
+    if ib_show200extLines
+        ib_hi_200_line := line.new(bar_index, na, bar_index + 1, na, color=ib_color200extLine, width=ib_width200extLines, extend=extend.right)
+        ib_lo_200_line := line.new(bar_index, na, bar_index + 1, na, color=ib_color200extLine, width=ib_width200extLines, extend=extend.right)
+        array.push(ib_hist_ext_lines, ib_hi_200_line)
+        array.push(ib_hist_ext_lines, ib_lo_200_line)
+
+    if ib_showLabels
+        ib_lbl_hi := label.new(bar_index + ib_nbarsforward, ib_hi, "IB.hi", style=label.style_none, textcolor=ib_colorIBlines, textalign=text.align_left, size=ib_label_size)
+        ib_lbl_lo := label.new(bar_index + ib_nbarsforward, ib_lo, "IB.lo", style=label.style_none, textcolor=ib_colorIBlines, textalign=text.align_left, size=ib_label_size)
+        array.push(ib_hist_labels, ib_lbl_hi)
+        array.push(ib_hist_labels, ib_lbl_lo)
+
+        if ib_showMidLine
+            ib_lbl_mid := label.new(bar_index + ib_nbarsforward, (ib_hi + ib_lo) / 2.0, "IB.mid", style=label.style_none, textcolor=ib_colorIBlines, textalign=text.align_left, size=ib_label_size)
+            array.push(ib_hist_labels, ib_lbl_mid)
+
+        if ib_show100extLines
+            ib_lbl_hi_100 := label.new(bar_index + ib_nbarsforward, na, "IB+1x", style=label.style_none, textcolor=ib_color100extLine, textalign=text.align_left, size=ib_label_size)
+            ib_lbl_lo_100 := label.new(bar_index + ib_nbarsforward, na, "IB-1x", style=label.style_none, textcolor=ib_color100extLine, textalign=text.align_left, size=ib_label_size)
+            array.push(ib_hist_labels, ib_lbl_hi_100)
+            array.push(ib_hist_labels, ib_lbl_lo_100)
+
+        if ib_show200extLines
+            ib_lbl_hi_200 := label.new(bar_index + ib_nbarsforward, na, "IB+2x", style=label.style_none, textcolor=ib_color200extLine, textalign=text.align_left, size=ib_label_size)
+            ib_lbl_lo_200 := label.new(bar_index + ib_nbarsforward, na, "IB-2x", style=label.style_none, textcolor=ib_color200extLine, textalign=text.align_left, size=ib_label_size)
+            array.push(ib_hist_labels, ib_lbl_hi_200)
+            array.push(ib_hist_labels, ib_lbl_lo_200)
+
+    // Trim history to last N sessions
+    f_trim_lines(ib_hist_hi_lines, ib_ndays)
+    f_trim_lines(ib_hist_lo_lines, ib_ndays)
+    f_trim_lines(ib_hist_mid_lines, ib_ndays)
+    f_trim_boxes(ib_hist_boxes, ib_ndays)
+
+    // labels per session (max)
+    int lblPerSess = 2 + (ib_showMidLine ? 1 : 0) + (ib_show100extLines ? 2 : 0) + (ib_show200extLines ? 2 : 0)
+    f_trim_labels(ib_hist_labels, ib_ndays * lblPerSess)
+
+    // extension lines per session (max)
+    int extPerSess = (ib_show50extLines ? 2 : 0) + (ib_show100extLines ? 2 : 0) + (ib_show200extLines ? 2 : 0)
+    if extPerSess == 0
+        // no-op
+        extPerSess := 0
+    f_trim_lines(ib_hist_ext_lines, ib_ndays * extPerSess)
+
+// Update IB levels during IB window
+ib_active = ib_enabled and timeframe.isintraday and ib_inSession and not na(ib_startTime) and (time - ib_startTime < ib_duration_ms)
+if ib_active
+    ib_hi := math.max(nz(ib_hi, high), high)
+    ib_lo := math.min(na(ib_lo) ? low : ib_lo, low)
+
+// Apply updates while live
+ib_range = not na(ib_hi) and not na(ib_lo) ? (ib_hi - ib_lo) : na
+ib_changed = ib_enabled and timeframe.isintraday and ib_inSession and (ib_active or ib_sessionStart) and (ib_range != ib_range[1] or ib_sessionStart)
+
+if ib_changed
+    if not na(ib_hi_line)
+        line.set_y1(ib_hi_line, ib_hi), line.set_y2(ib_hi_line, ib_hi)
+    if not na(ib_lo_line)
+        line.set_y1(ib_lo_line, ib_lo), line.set_y2(ib_lo_line, ib_lo)
+
+    if not na(ib_box)
+        box.set_top(ib_box, ib_hi), box.set_bottom(ib_box, ib_lo)
+
+    if ib_showMidLine and not na(ib_mid_line)
+        midv2 = (ib_hi + ib_lo) / 2.0
+        line.set_y1(ib_mid_line, midv2), line.set_y2(ib_mid_line, midv2)
+
+    if not na(ib_range) and ib_range > 0
+        if ib_show50extLines
+            if not na(ib_hi_50_line)
+                v = ib_hi + ib_range / 2.0
+                line.set_y1(ib_hi_50_line, v), line.set_y2(ib_hi_50_line, v)
+            if not na(ib_lo_50_line)
+                v = ib_lo - ib_range / 2.0
+                line.set_y1(ib_lo_50_line, v), line.set_y2(ib_lo_50_line, v)
+
+        if ib_show100extLines
+            if not na(ib_hi_100_line)
+                v = ib_hi + ib_range
+                line.set_y1(ib_hi_100_line, v), line.set_y2(ib_hi_100_line, v)
+            if not na(ib_lo_100_line)
+                v = ib_lo - ib_range
+                line.set_y1(ib_lo_100_line, v), line.set_y2(ib_lo_100_line, v)
+
+        if ib_show200extLines
+            if not na(ib_hi_200_line)
+                v = ib_hi + 2.0 * ib_range
+                line.set_y1(ib_hi_200_line, v), line.set_y2(ib_hi_200_line, v)
+            if not na(ib_lo_200_line)
+                v = ib_lo - 2.0 * ib_range
+                line.set_y1(ib_lo_200_line, v), line.set_y2(ib_lo_200_line, v)
+
+    if ib_showLabels
+        if not na(ib_lbl_hi)
+            label.set_y(ib_lbl_hi, ib_hi)
+        if not na(ib_lbl_lo)
+            label.set_y(ib_lbl_lo, ib_lo)
+        if ib_showMidLine and not na(ib_lbl_mid)
+            label.set_y(ib_lbl_mid, (ib_hi + ib_lo) / 2.0)
+
+        if not na(ib_range) and ib_range > 0
+            if ib_show100extLines
+                if not na(ib_lbl_hi_100)
+                    label.set_y(ib_lbl_hi_100, ib_hi + ib_range)
+                if not na(ib_lbl_lo_100)
+                    label.set_y(ib_lbl_lo_100, ib_lo - ib_range)
+            if ib_show200extLines
+                if not na(ib_lbl_hi_200)
+                    label.set_y(ib_lbl_hi_200, ib_hi + 2.0 * ib_range)
+                if not na(ib_lbl_lo_200)
+                    label.set_y(ib_lbl_lo_200, ib_lo - 2.0 * ib_range)
+
+        if ib_display_value
+            if not na(ib_lbl_hi)
+                label.set_text(ib_lbl_hi, "IB.hi " + str.tostring(nround(ib_hi)))
+            if not na(ib_lbl_lo)
+                label.set_text(ib_lbl_lo, "IB.lo " + str.tostring(nround(ib_lo)))
+            if ib_showMidLine and not na(ib_lbl_mid)
+                label.set_text(ib_lbl_mid, "IB.mid " + str.tostring(nround((ib_hi + ib_lo) / 2.0)))
+            if ib_show100extLines and not na(ib_range) and ib_range > 0
+                if not na(ib_lbl_hi_100)
+                    label.set_text(ib_lbl_hi_100, "IB+1x " + str.tostring(nround(ib_hi + ib_range)))
+                if not na(ib_lbl_lo_100)
+                    label.set_text(ib_lbl_lo_100, "IB-1x " + str.tostring(nround(ib_lo - ib_range)))
+            if ib_show200extLines and not na(ib_range) and ib_range > 0
+                if not na(ib_lbl_hi_200)
+                    label.set_text(ib_lbl_hi_200, "IB+2x " + str.tostring(nround(ib_hi + 2.0 * ib_range)))
+                if not na(ib_lbl_lo_200)
+                    label.set_text(ib_lbl_lo_200, "IB-2x " + str.tostring(nround(ib_lo - 2.0 * ib_range)))
+
+// Move current-session labels right
+if ib_enabled and timeframe.isintraday and ib_showLabels and ib_inSession
+    if not na(ib_lbl_hi)
+        label.set_x(ib_lbl_hi, bar_index + ib_nbarsforward)
+    if not na(ib_lbl_lo)
+        label.set_x(ib_lbl_lo, bar_index + ib_nbarsforward)
+    if ib_showMidLine and not na(ib_lbl_mid)
+        label.set_x(ib_lbl_mid, bar_index + ib_nbarsforward)
+    if ib_show100extLines
+        if not na(ib_lbl_hi_100)
+            label.set_x(ib_lbl_hi_100, bar_index + ib_nbarsforward)
+        if not na(ib_lbl_lo_100)
+            label.set_x(ib_lbl_lo_100, bar_index + ib_nbarsforward)
+    if ib_show200extLines
+        if not na(ib_lbl_hi_200)
+            label.set_x(ib_lbl_hi_200, bar_index + ib_nbarsforward)
+        if not na(ib_lbl_lo_200)
+            label.set_x(ib_lbl_lo_200, bar_index + ib_nbarsforward)
+
+// On session end: stop extending the current-session objects (so old days don't extend forever)
+if ib_enabled and timeframe.isintraday and ib_sessionEnd
+    if not na(ib_box)
+        box.set_right(ib_box, bar_index), box.set_extend(ib_box, extend.none)
+    if not na(ib_or_box)
+        box.set_right(ib_or_box, time), box.set_extend(ib_or_box, extend.none)
+    if not na(ib_fp_box)
+        box.set_right(ib_fp_box, time), box.set_extend(ib_fp_box, extend.none)
+
+    if not na(ib_hi_line)
+        line.set_x2(ib_hi_line, bar_index), line.set_extend(ib_hi_line, extend.none)
+    if not na(ib_lo_line)
+        line.set_x2(ib_lo_line, bar_index), line.set_extend(ib_lo_line, extend.none)
+    if not na(ib_mid_line)
+        line.set_x2(ib_mid_line, bar_index), line.set_extend(ib_mid_line, extend.none)
+
+    if not na(ib_hi_50_line)
+        line.set_x2(ib_hi_50_line, bar_index), line.set_extend(ib_hi_50_line, extend.none)
+    if not na(ib_lo_50_line)
+        line.set_x2(ib_lo_50_line, bar_index), line.set_extend(ib_lo_50_line, extend.none)
+    if not na(ib_hi_100_line)
+        line.set_x2(ib_hi_100_line, bar_index), line.set_extend(ib_hi_100_line, extend.none)
+    if not na(ib_lo_100_line)
+        line.set_x2(ib_lo_100_line, bar_index), line.set_extend(ib_lo_100_line, extend.none)
+    if not na(ib_hi_200_line)
+        line.set_x2(ib_hi_200_line, bar_index), line.set_extend(ib_hi_200_line, extend.none)
+    if not na(ib_lo_200_line)
+        line.set_x2(ib_lo_200_line, bar_index), line.set_extend(ib_lo_200_line, extend.none)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VWAP calculations (no bands)
+// ─────────────────────────────────────────────────────────────────────────────
+nySession   = vwap1Session
+overnightSession = vwap2Session
+
+inS1 = not na(time(timeframe.period, nySession, vwapTz))
+inS2 = not na(time(timeframe.period, overnightSession, vwapTz))
+
+anchorNY = inS1 and (barstate.isfirst or not inS1[1])
+anchorOvernight = inS2 and (barstate.isfirst or not inS2[1])
+startS1 = anchorNY
+startS2 = anchorOvernight
+
+var float cumPV1 = 0.0
+var float cumV1  = 0.0
+var float cumPV2 = 0.0
+var float cumV2  = 0.0
+
+tp = vwapSource
+
+if startS1
+    cumPV1 := tp * volume
+    cumV1  := volume
+else if inS1
+    cumPV1 := cumPV1 + tp * volume
+    cumV1  := cumV1 + volume
+
+if startS2
+    cumPV2 := tp * volume
+    cumV2  := volume
+else if inS2
+    cumPV2 := cumPV2 + tp * volume
+    cumV2  := cumV2 + volume
+
+rawVwap1 = cumV1 > 0 ? cumPV1 / cumV1 : na
+rawVwap2 = cumV2 > 0 ? cumPV2 / cumV2 : na
+
+vwap1Prev = ta.valuewhen(inS1, rawVwap1, 0)
+vwap2Prev = ta.valuewhen(inS2, rawVwap2, 0)
+
+vwap1Chart = not na(rawVwap1) ? rawVwap1 : vwap1Prev
+vwap2Chart = not na(rawVwap2) ? rawVwap2 : vwap2Prev
+
+calcVwap1On5m() =>
+    var float cPV1 = 0.0
+    var float cV1 = 0.0
+    in1 = not na(time("5", nySession, vwapTz))
+    start1 = in1 and (barstate.isfirst or not in1[1])
+    t = hlc3
+    if start1
+        cPV1 := t * volume
+        cV1 := volume
+    else if in1
+        cPV1 := cPV1 + t * volume
+        cV1 := cV1 + volume
+    r1 = cV1 > 0 ? cPV1 / cV1 : na
+    r1Prev = ta.valuewhen(in1, r1, 0)
+    not na(r1) ? r1 : r1Prev
+
+calcVwap2On5m() =>
+    var float cPV2 = 0.0
+    var float cV2 = 0.0
+    in2 = not na(time("5", overnightSession, vwapTz))
+    start2 = in2 and (barstate.isfirst or not in2[1])
+    t = hlc3
+    if start2
+        cPV2 := t * volume
+        cV2 := volume
+    else if in2
+        cPV2 := cPV2 + t * volume
+        cV2 := cV2 + volume
+    r2 = cV2 > 0 ? cPV2 / cV2 : na
+    r2Prev = ta.valuewhen(in2, r2, 0)
+    not na(r2) ? r2 : r2Prev
+
+vwap1_5m = request.security(syminfo.tickerid, "5", calcVwap1On5m(), gaps = barmerge.gaps_off)
+vwap2_5m = request.security(syminfo.tickerid, "5", calcVwap2On5m(), gaps = barmerge.gaps_off)
+
+vwap1 = use5mCalc ? vwap1_5m : vwap1Chart
+vwap2 = use5mCalc ? vwap2_5m : vwap2Chart
+
+nyVWAP = vwap1
+// ─────────────────────────────────────────────────────────────────────────────
+// Opening range 15m (9:30–9:45)
+// ─────────────────────────────────────────────────────────────────────────────
+inORSession = not na(time(timeframe.period, orSession, timeZone))
+orSessionStart = inORSession and (barstate.isfirst or not inORSession[1])
+
+var float orHigh = na
+var float orLow  = na
+
+var int orHighTime = na
+var int orLowTime  = na
+
+if orSessionStart
+    orHigh := high
+    orLow  := low
+    orHighTime := time
+    orLowTime  := time
+else if inORSession
+    if na(orHigh) or high > orHigh
+        orHigh := high
+        orHighTime := time
+    if na(orLow) or low < orLow
+        orLow := low
+        orLowTime := time
+else
+    orHigh := nz(orHigh[1], orHigh)
+    orLow  := nz(orLow[1], orLow)
+    orHighTime := nz(orHighTime[1], orHighTime)
+    orLowTime  := nz(orLowTime[1], orLowTime)
+
+// ORB size (%) — 15m OR (3 decimals)
+orbSizePct    = (not na(orHigh) and not na(orLow) and orLow != 0.0) ? ((orHigh - orLow) / orLow) * 100.0 : na
+orbSizePctStr = beforeOROpen ? "—" : (not na(orbSizePct) ? (str.tostring(orbSizePct, "#.###") + "%") : "—")
+
+// Formed first (15m OR) — chart-timeframe version (kept; table uses 1m-consistent result)
+string formedFirstText  = "—"
+color  formedFirstColor = tblNaColor
+if beforeOROpen or na(orHighTime) or na(orLowTime)
+    formedFirstText := "—"
+    formedFirstColor := tblNaColor
+else
+    if orHighTime < orLowTime
+        formedFirstText := "High"
+        formedFirstColor := color.new(color.green, 0)
+    else if orLowTime < orHighTime
+        formedFirstText := "Low"
+        formedFirstColor := color.new(color.red, 0)
+    else
+        formedFirstText := "—"
+        formedFirstColor := tblNaColor
+
+// Formed first (FORCE 1m so it matches across all chart timeframes)
+calcFormedFirstOn1m() =>
+    inOR_1m    = not na(time("1", orSession, timeZone))
+    startOR_1m = inOR_1m and (barstate.isfirst or not inOR_1m[1])
+
+    var float h = na
+    var float l = na
+    var int   ht = na
+    var int   lt = na
+
+    if startOR_1m
+        h := high
+        l := low
+        ht := time
+        lt := time
+    else if inOR_1m
+        if na(h) or high > h
+            h := high
+            ht := time
+        if na(l) or low < l
+            l := low
+            lt := time
+    else
+        h  := nz(h[1], h)
+        l  := nz(l[1], l)
+        ht := nz(ht[1], ht)
+        lt := nz(lt[1], lt)
+
+    int out = 0
+    if not na(ht) and not na(lt)
+        out := ht < lt ? 1 : lt < ht ? -1 : 0
+    out
+
+formedFirstInt_1m = request.security(syminfo.tickerid, "1", calcFormedFirstOn1m(), gaps = barmerge.gaps_off)
+
+string formedFirstText_1m  = "—"
+color  formedFirstColor_1m = tblNaColor
+if beforeOROpen
+    formedFirstText_1m := "—"
+    formedFirstColor_1m := tblNaColor
+else
+    if formedFirstInt_1m == 1
+        formedFirstText_1m := "High"
+        formedFirstColor_1m := color.new(color.green, 0)
+    else if formedFirstInt_1m == -1
+        formedFirstText_1m := "Low"
+        formedFirstColor_1m := color.new(color.red, 0)
+    else
+        formedFirstText_1m := "—"
+        formedFirstColor_1m := tblNaColor
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Opening range 5m (9:30–9:35)
+// ─────────────────────────────────────────────────────────────────────────────
+inORSession5m = not na(time(timeframe.period, orSession5m, timeZone))
+orSessionStart5m = inORSession5m and (barstate.isfirst or not inORSession5m[1])
+
+var float orHigh5m = na
+var float orLow5m  = na
+
+if orSessionStart5m
+    orHigh5m := high
+    orLow5m  := low
+else if inORSession5m
+    orHigh5m := math.max(nz(orHigh5m), high)
+    orLow5m  := math.min(na(orLow5m) ? low : orLow5m, low)
+else
+    orHigh5m := nz(orHigh5m[1], orHigh5m)
+    orLow5m  := nz(orLow5m[1], orLow5m)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Status logic — 15m
+// ─────────────────────────────────────────────────────────────────────────────
+var int firstBreak = 0
+var bool hasBrokenOut = false
+var bool hasBrokenDown = false
+var int lastExitDirection = 0
+
+if orSessionStart
+    firstBreak := 0
+    hasBrokenOut := false
+    hasBrokenDown := false
+    lastExitDirection := 0
+
+if not na(orHigh) and not na(orLow)
+    if close > orHigh
+        hasBrokenOut := true
+        if firstBreak == 0
+            firstBreak := 1
+        lastExitDirection := 1
+    else if close < orLow
+        hasBrokenDown := true
+        if firstBreak == 0
+            firstBreak := -1
+        lastExitDirection := -1
+
+float status = na
+string statusText = na
+
+if not na(orHigh) and not na(orLow)
+    if close > orHigh
+        status := 1
+        statusText := hasBrokenDown ? "Double l ▲" : "Single l ▲"
+    else if close < orLow
+        status := -1
+        statusText := hasBrokenOut ? "Double l ▼" : "Single l ▼"
+    else
+        status := 0
+        if hasBrokenOut and hasBrokenDown
+            statusText := firstBreak == 1 ? "Double Inside l ▼" : firstBreak == -1 ? "Double Inside l ▲" : "Inside"
+        else if firstBreak == -1
+            statusText := "Inside l ▼"
+        else if firstBreak == 1
+            statusText := "Inside l ▲"
+        else
+            statusText := "Inside"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Status logic — 5m OR II
+// ─────────────────────────────────────────────────────────────────────────────
+var int firstBreak5m = 0
+var bool hasBrokenOut5m = false
+var bool hasBrokenDown5m = false
+var int lastExitDirection5m = 0
+
+if orSessionStart5m
+    firstBreak5m := 0
+    hasBrokenOut5m := false
+    hasBrokenDown5m := false
+    lastExitDirection5m := 0
+
+if not na(orHigh5m) and not na(orLow5m)
+    if close > orHigh5m
+        hasBrokenOut5m := true
+        if firstBreak5m == 0
+            firstBreak5m := 1
+        lastExitDirection5m := 1
+    else if close < orLow5m
+        hasBrokenDown5m := true
+        if firstBreak5m == 0
+            firstBreak5m := -1
+        lastExitDirection5m := -1
+
+float status5m = na
+string statusText5m = na
+
+if not na(orHigh5m) and not na(orLow5m)
+    if close > orHigh5m
+        status5m := 1
+        statusText5m := hasBrokenDown5m ? "Double l ▲" : "Single l ▲"
+    else if close < orLow5m
+        status5m := -1
+        statusText5m := hasBrokenOut5m ? "Double l ▼" : "Single l ▼"
+    else
+        status5m := 0
+        if hasBrokenOut5m and hasBrokenDown5m
+            statusText5m := firstBreak5m == 1 ? "Double Inside l ▼" : firstBreak5m == -1 ? "Double Inside l ▲" : "Inside"
+        else if firstBreak5m == -1
+            statusText5m := "Inside l ▼"
+        else if firstBreak5m == 1
+            statusText5m := "Inside l ▲"
+        else
+            statusText5m := "Inside"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Initial Balance range (9:30–10:30) — same status principle as Opening Range
+// ─────────────────────────────────────────────────────────────────────────────
+inIBRangeSession = not na(time(timeframe.period, ibRangeSession, timeZone))
+ibRangeSessionStart = inIBRangeSession and (barstate.isfirst or not inIBRangeSession[1])
+
+var float ibRangeHigh = na
+var float ibRangeLow  = na
+
+if ibRangeSessionStart
+    ibRangeHigh := high
+    ibRangeLow  := low
+else if inIBRangeSession
+    ibRangeHigh := math.max(nz(ibRangeHigh), high)
+    ibRangeLow  := math.min(na(ibRangeLow) ? low : ibRangeLow, low)
+else
+    ibRangeHigh := nz(ibRangeHigh[1], ibRangeHigh)
+    ibRangeLow  := nz(ibRangeLow[1], ibRangeLow)
+
+var int firstBreakIbr = 0
+var bool hasBrokenOutIbr = false
+var bool hasBrokenDownIbr = false
+
+if ibRangeSessionStart
+    firstBreakIbr := 0
+    hasBrokenOutIbr := false
+    hasBrokenDownIbr := false
+
+if not na(ibRangeHigh) and not na(ibRangeLow)
+    if close > ibRangeHigh
+        hasBrokenOutIbr := true
+        if firstBreakIbr == 0
+            firstBreakIbr := 1
+    else if close < ibRangeLow
+        hasBrokenDownIbr := true
+        if firstBreakIbr == 0
+            firstBreakIbr := -1
+
+float statusIbr = na
+string statusTextIbr = na
+
+if not na(ibRangeHigh) and not na(ibRangeLow)
+    if close > ibRangeHigh
+        statusIbr := 1
+        statusTextIbr := hasBrokenDownIbr ? "Double l ▲" : "Single l ▲"
+    else if close < ibRangeLow
+        statusIbr := -1
+        statusTextIbr := hasBrokenOutIbr ? "Double l ▼" : "Single l ▼"
+    else
+        statusIbr := 0
+        if hasBrokenOutIbr and hasBrokenDownIbr
+            statusTextIbr := firstBreakIbr == 1 ? "Double Inside l ▼" : firstBreakIbr == -1 ? "Double Inside l ▲" : "Inside"
+        else if firstBreakIbr == -1
+            statusTextIbr := "Inside l ▼"
+        else if firstBreakIbr == 1
+            statusTextIbr := "Inside l ▲"
+        else
+            statusTextIbr := "Inside"
+
+// Table styling: Opening Range & Initial Balance — Forming (#ffcc4c) vs Formed (grey) vs breakout status
+color colRangeForming = color.rgb(255, 208, 97)
+color colRangeFormedBar = color.gray
+
+string openingRangeTableText = "—"
+color  openingRangeTableColor = color.gray
+if beforeOROpen
+    openingRangeTableText := "—"
+    openingRangeTableColor := tblNaColor
+else if inORSession
+    openingRangeTableText := "Forming"
+    openingRangeTableColor := colRangeForming
+else if not na(orHigh) and not na(orLow) and not hasBrokenOut and not hasBrokenDown
+    openingRangeTableText := "Formed"
+    openingRangeTableColor := colRangeFormedBar
+else
+    openingRangeTableText := na(statusText) ? "—" : statusText
+    openingRangeTableColor := switch status
+        1  => tblInsideColor
+        -1 => tblInsideColor
+        0  => tblInsideColor
+        => color.gray
+
+string ibRangeTableText = "—"
+color  ibRangeTableColor = color.gray
+if beforeOROpen
+    ibRangeTableText := "—"
+    ibRangeTableColor := tblNaColor
+else if inIBRangeSession
+    ibRangeTableText := "Forming"
+    ibRangeTableColor := colRangeForming
+else if not na(ibRangeHigh) and not na(ibRangeLow) and not hasBrokenOutIbr and not hasBrokenDownIbr
+    ibRangeTableText := "Formed"
+    ibRangeTableColor := colRangeFormedBar
+else
+    ibRangeTableText := na(statusTextIbr) ? "—" : statusTextIbr
+    ibRangeTableColor := switch statusIbr
+        1  => tblInsideColor
+        -1 => tblInsideColor
+        0  => tblInsideColor
+        => color.gray
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IB formed first (1m — which extreme formed first in Initial Balance window)
+// ─────────────────────────────────────────────────────────────────────────────
+calcFormedFirstIBOn1m() =>
+    inIB_1m    = not na(time("1", ibRangeSession, timeZone))
+    startIB_1m = inIB_1m and (barstate.isfirst or not inIB_1m[1])
+    var float h = na
+    var float l = na
+    var int   ht = na
+    var int   lt = na
+    if startIB_1m
+        h := high
+        l := low
+        ht := time
+        lt := time
+    else if inIB_1m
+        if na(h) or high > h
+            h := high
+            ht := time
+        if na(l) or low < l
+            l := low
+            lt := time
+    else
+        h  := nz(h[1], h)
+        l  := nz(l[1], l)
+        ht := nz(ht[1], ht)
+        lt := nz(lt[1], lt)
+    int out = 0
+    if not na(ht) and not na(lt)
+        out := ht < lt ? 1 : lt < ht ? -1 : 0
+    out
+
+formedFirstIBInt_1m = request.security(syminfo.tickerid, "1", calcFormedFirstIBOn1m(), gaps = barmerge.gaps_off)
+
+beforeNYOpen = not na(time(timeframe.period, beforeVwap1Session, vwapTz))
+
+// IB size (%) — Initial Balance window (3 decimals)
+ibSizePct    = (not na(ibRangeHigh) and not na(ibRangeLow) and ibRangeLow != 0.0) ? ((ibRangeHigh - ibRangeLow) / ibRangeLow) * 100.0 : na
+ibSizePctStr = beforeOROpen ? "—" : (not na(ibSizePct) ? (str.tostring(ibSizePct, "#.###") + "%") : "—")
+
+string formedFirstIBText_1m  = "—"
+color  formedFirstIBColor_1m = tblNaColor
+if beforeOROpen
+    formedFirstIBText_1m := "—"
+    formedFirstIBColor_1m := tblNaColor
+else
+    if formedFirstIBInt_1m == 1
+        formedFirstIBText_1m := "High"
+        formedFirstIBColor_1m := color.new(color.green, 0)
+    else if formedFirstIBInt_1m == -1
+        formedFirstIBText_1m := "Low"
+        formedFirstIBColor_1m := color.new(color.red, 0)
+    else
+        formedFirstIBText_1m := "—"
+        formedFirstIBColor_1m := tblNaColor
+
+color tblStatMergeBg = color.new(color.gray, 88)
+
+string orbStatsMergedText = "ORB stats"
+string ibStatsMergedText = "IB stats"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bid/Offer — Above 9 EMA Above NY VWAP / Below 9EMA below NY VWAP
+// ─────────────────────────────────────────────────────────────────────────────
+ema9 = ta.ema(close, 9)
+ema9_5m = request.security(syminfo.tickerid, "5", ta.ema(close, 9), gaps = barmerge.gaps_off)
+
+string BidOfferText = na
+color BidOfferColor = color.gray
+if beforeNYOpen
+    BidOfferText := "—"
+    BidOfferColor := tblNaColor
+else if not na(ema9_5m) and not na(nyVWAP)
+    if close >= ema9_5m and close >= nyVWAP
+        BidOfferText := "Strong Bid"
+        BidOfferColor := color.new(color.green, 0)
+    else
+        BidOfferText := "Strong Offer"
+        BidOfferColor := color.new(color.red, 0)
+else
+    BidOfferText := "—"
+    BidOfferColor := tblNaColor
+
+string vwapStatusText = na
+if beforeNYOpen
+    vwapStatusText := "—"
+else if not na(nyVWAP)
+    vwapStatusText := close >= nyVWAP ? "🟢" : "🔴"
+
+string overnightVwapStatusText = na
+if not na(vwap2)
+    overnightVwapStatusText := close >= vwap2 ? "🟢" : "🔴"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5m MA — 200 EMA on 5m (above = 🟢, below = 🔴)
+// ─────────────────────────────────────────────────────────────────────────────
+ema200_5m = request.security(syminfo.tickerid, "5", ta.ema(close, 200), gaps = barmerge.gaps_off)
+string pdNyVwapStatusText = na
+if not na(ema200_5m)
+    pdNyVwapStatusText := close >= ema200_5m ? "🟢" : "🔴"
+else
+    pdNyVwapStatusText := "—"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trend calculation based on VWAP statuses and Opening Range
+// ─────────────────────────────────────────────────────────────────────────────
+string trendText = na
+color trendColor = color.gray
+
+if not na(status) and not beforeOROpen
+    int greenCount = 0
+    int redCount = 0
+    int totalCount = 0
+
+    if vwapStatusText == "🟢"
+        greenCount += 1
+        totalCount += 1
+    else if vwapStatusText == "🔴"
+        redCount += 1
+        totalCount += 1
+
+    if overnightVwapStatusText == "🟢"
+        greenCount += 1
+        totalCount += 1
+    else if overnightVwapStatusText == "🔴"
+        redCount += 1
+        totalCount += 1
+
+    if pdNyVwapStatusText == "🟢"
+        greenCount += 1
+        totalCount += 1
+    else if pdNyVwapStatusText == "🔴"
+        redCount += 1
+        totalCount += 1
+
+    if status == 1
+        if greenCount == 3 and totalCount == 3
+            trendText := "Strong up"
+            trendColor := color.new(color.green, 0)
+        else
+            trendText := "—"
+    else if status == -1
+        if redCount == 3 and totalCount == 3
+            trendText := "Strong down"
+            trendColor := color.new(color.red, 0)
+        else
+            trendText := "—"
+    else if status == 0
+        if greenCount == 3 and totalCount == 3
+            trendText := "Trend is up"
+            trendColor := color.new(color.green, 0)
+        else if redCount == 3 and totalCount == 3
+            trendText := "Trend is down"
+            trendColor := color.new(color.red, 0)
+        else if (greenCount == 2 and redCount == 1) or (redCount == 2 and greenCount == 1)
+            trendText := "Trend is Mixed"
+            trendColor := redCount == 2 ? color.new(color.red, 0) : color.new(color.green, 0)
+        else
+            trendText := "—"
+    else
+        trendText := "—"
+else
+    trendText := "—"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gap Type & Gap % (using RTH session data)
+// ─────────────────────────────────────────────────────────────────────────────
+inRTH = not na(time(timeframe.period, "0930-1600", "America/New_York"))
+rthSessionStart = inRTH and (barstate.isfirst or not inRTH[1])
+rthSessionEnd = not inRTH and inRTH[1]
+
+var float rthOpenToday = na
+var float rthCloseYesterday = na
+var float lastRTHClose = na
+
+if rthSessionStart
+    rthOpenToday := open
+    rthCloseYesterday := lastRTHClose
+
+if inRTH
+    lastRTHClose := close
+
+if rthSessionEnd
+    lastRTHClose := close[1]
+
+rthOpenToday := na(rthOpenToday) ? rthOpenToday[1] : rthOpenToday
+rthCloseYesterday := na(rthCloseYesterday) ? rthCloseYesterday[1] : rthCloseYesterday
+lastRTHClose := na(lastRTHClose) ? lastRTHClose[1] : lastRTHClose
+
+openToday      = not na(rthOpenToday) ? rthOpenToday : request.security(syminfo.tickerid, "D", open,  gaps = barmerge.gaps_off)
+closeYesterday = not na(rthCloseYesterday) ? rthCloseYesterday : request.security(syminfo.tickerid, "D", close[1], gaps = barmerge.gaps_off)
+
+gapPoints = openToday - closeYesterday
+gapPct    = not na(closeYesterday) and closeYesterday != 0 ? (gapPoints / closeYesterday) * 100.0 : na
+
+string gapTypeText = na
+if not na(openToday) and not na(closeYesterday)
+    isFlat = useGapPctThreshold ? (math.abs(gapPct) <= gapThresholdPct) : (math.abs(gapPoints) <= gapThreshold)
+    if isFlat
+        gapTypeText := "Flat Open"
+    else if openToday > closeYesterday
+        gapTypeText := "Gap Up"
+    else
+        gapTypeText := "Gap Down"
+
+gapPctStr = not na(gapPct) ? str.tostring(gapPct, "#.##") + "%" : "—"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ICT Midnight Open level
+// ─────────────────────────────────────────────────────────────────────────────
+nymid = time("60", midSessionInput, midTzInput)
+
+midLineStyle = midLineStyleStr == "Solid" ? line.style_solid : midLineStyleStr == "Dotted" ? line.style_dotted : line.style_dashed
+midExtend    = midExtendMode == "Right" ? extend.right : midExtendMode == "Both" ? extend.both : extend.none
+
+baseDurationMs = midExtendMode == "2 Days" ? 172800000 : 86400000
+midDurationMs  = midExtendByHours ? midExtendHours * 3600000 : baseDurationMs
+
+var float ictMidnightOpen = na
+
+if not na(nymid)
+    if na(nymid[1])
+        ictMidnightOpen := open
+    else
+        ictMidnightOpen := math.max(open, ictMidnightOpen)
+
+var line midLine = na
+
+if midShowLine and ictMidnightOpen != ictMidnightOpen[1] and not na(ictMidnightOpen)
+    if not na(midLine)
+        line.set_x2(midLine, nymid)
+        line.set_extend(midLine, extend.none)
+    midLine := line.new(nymid, ictMidnightOpen, nymid + midDurationMs, ictMidnightOpen,
+        xloc = xloc.bar_time, extend = midExtend, color = midLineColor, style = midLineStyle, width = midLineWidth)
+    midLabelX = (midExtendMode == "Right" or midExtendMode == "Both") ? timenow : (nymid + midDurationMs)
+    midLabelY = midLabelYPos == "Above" ? (ictMidnightOpen + midLabelOffset) : midLabelYPos == "Below" ? (ictMidnightOpen - midLabelOffset) : ictMidnightOpen
+    label.new(midLabelX, midLabelY, "Midnight",
+        xloc = xloc.bar_time, yloc = yloc.price,
+        color = midLabelBgCol, style = label.style_label_upper_right,
+        textalign = text.align_right, size = midLabelSize, textcolor = midLabelTextCol)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Midnight open status (Engaged / Not engaged)
+// ─────────────────────────────────────────────────────────────────────────────
+midnightOpen = ictMidnightOpen
+
+var bool touchedMidnightAfter930 = false
+touchedThisBar = not na(midnightOpen) and high >= midnightOpen and low <= midnightOpen
+
+if beforeOROpen
+    touchedMidnightAfter930 := false
+else
+    touchedMidnightAfter930 := touchedThisBar or (barstate.isfirst ? false : touchedMidnightAfter930[1])
+
+string midnightOpenText = na
+color  midnightOpenColor = color.gray
+
+if beforeOROpen
+    midnightOpenText  := "—"
+    midnightOpenColor := color.gray
+else
+    if touchedMidnightAfter930
+        midnightOpenText  := "Engaged"
+        midnightOpenColor := (not na(midnightOpen) and close < midnightOpen) ? color.new(color.red, 0) : color.new(color.green, 0)
+    else
+        if not na(midnightOpen)
+            midnightOpenText  := close >= midnightOpen ? "Not engaged I ▲" : "Not engaged I ▼"
+        else
+            midnightOpenText  := "Not engaged"
+        midnightOpenColor := tblInsideColor
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Key levels — HTF data (regular session, lookahead on — matches classic script)
+// ─────────────────────────────────────────────────────────────────────────────
+kl_t = ticker.new(syminfo.prefix, syminfo.ticker, session.regular)
+kl_yesterdayHigh = request.security(kl_t, "D", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+kl_yesterdayLow = request.security(kl_t, "D", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+kl_lastweekHigh = request.security(kl_t, "W", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+kl_lastweekLow = request.security(kl_t, "W", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+kl_lastmonthHigh = request.security(kl_t, "M", high[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+kl_lastmonthLow = request.security(kl_t, "M", low[1], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prior day
+// ─────────────────────────────────────────────────────────────────────────────
+highYesterday = request.security(syminfo.tickerid, "D", high[1], gaps = barmerge.gaps_off)
+lowYesterday  = request.security(syminfo.tickerid, "D", low[1], gaps = barmerge.gaps_off)
+
+string priorDayText = na
+if not na(highYesterday) and not na(lowYesterday)
+    if close > highYesterday
+        priorDayText := "Above"
+    else if close < lowYesterday
+        priorDayText := "Below"
+    else
+        priorDayText := "Inside"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8 AM Candle (9AM-1PM: break of 8AM 1H candle)
+// ─────────────────────────────────────────────────────────────────────────────
+get8amCandleHL() =>
+    var float h8 = na
+    var float l8 = na
+    in9to10 = not na(time("60", "0900-1000", timeZone))
+    if in9to10 and (barstate.isfirst or not in9to10[1])
+        h8 := high[1]
+        l8 := low[1]
+    [h8, l8]
+
+get8amResultOn5m() =>
+    [h8, l8] = request.security(syminfo.tickerid, "60", get8amCandleHL(), gaps = barmerge.gaps_off)
+    in9to13 = not na(time("5", "0900-1300", timeZone))
+    newDay = ta.change(time("D", timeZone)) != 0
+    var int result = 0
+    if newDay
+        result := 0
+    if in9to13 and not na(h8) and not na(l8)
+        if close > h8
+            result := 1
+        else if close < l8
+            result := -1
+    result
+
+eightAmResult = request.security(syminfo.tickerid, "5", get8amResultOn5m(), gaps = barmerge.gaps_off)
+string eightAmText = eightAmResult == 1 ? "Bullish" : eightAmResult == -1 ? "Bearish" : "—"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C2 — Range 0:00–6:00 AM
+// ─────────────────────────────────────────────────────────────────────────────
+getC2HL() =>
+    inC2 = not na(time(timeframe.period, "0000-0600", "America/New_York"))
+    startC2 = inC2 and (barstate.isfirst or not inC2[1])
+    var float h = na
+    var float l = na
+    if startC2
+        h := high
+        l := low
+    else if inC2
+        h := math.max(nz(h), high)
+        l := math.min(na(l) ? low : l, low)
+    else
+        h := nz(h[1], h)
+        l := nz(l[1], l)
+    [h, l]
+
+[c2High5m, c2Low5m] = request.security(syminfo.tickerid, "5", getC2HL(), gaps = barmerge.gaps_off)
+
+inC2Session   = not na(time(timeframe.period, "0000-0600", timeZone))
+c2SessionStart = inC2Session and (barstate.isfirst or not inC2Session[1])
+
+var float c2High = na
+var float c2Low  = na
+
+if c2SessionStart
+    c2High := high
+    c2Low  := low
+else if inC2Session
+    c2High := math.max(nz(c2High), high)
+    c2Low  := math.min(na(c2Low) ? low : c2Low, low)
+else
+    c2High := nz(c2High[1], c2High)
+    c2Low  := nz(c2Low[1], c2Low)
+
+c2HighFinal = not na(c2High5m) ? c2High5m : c2High
+c2LowFinal  = not na(c2Low5m) ? c2Low5m : c2Low
+
+beforeC2End = inC2Session
+
+string c2Text  = na
+color  c2Color = color.gray
+if beforeC2End
+    c2Text  := "—"
+else if not na(c2HighFinal) and not na(c2LowFinal)
+    if close > c2HighFinal
+        c2Text  := "Outside"
+        c2Color := color.new(color.green, 0)
+    else if close < c2LowFinal
+        c2Text  := "Outside"
+        c2Color := color.new(color.red, 0)
+    else
+        c2Text  := "Inside"
+        c2Color := tblInsideColor
+else
+    c2Text := "—"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6AM Open vs 9:45 reference — 6am & 9:45 open from 1m; on 5m chart use 9:40 bar close (end of 9:40–9:45)
+// ─────────────────────────────────────────────────────────────────────────────
+calc6amOpenOn1mOnly() =>
+    newDay = ta.change(time("D", timeZone)) != 0
+    var float open6am = na
+    is6amBar = not na(time("1", "0600-0601", timeZone))
+    if newDay
+        open6am := na
+    if is6amBar and na(open6am)
+        open6am := open
+    open6am
+
+calcOpen945On1mOnly() =>
+    newDay = ta.change(time("D", timeZone)) != 0
+    var float o945 = na
+    is945Bar = not na(time("1", "0945-0946", timeZone))
+    if newDay
+        o945 := na
+    if is945Bar and na(o945)
+        o945 := open
+    o945
+
+sixAmOpen_1m = request.security(syminfo.tickerid, "1", calc6amOpenOn1mOnly(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+open945_1m   = request.security(syminfo.tickerid, "1", calcOpen945On1mOnly(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+
+isChart5m = timeframe.isintraday and timeframe.period == "5"
+
+var float ref945_5m_940close = na
+newDayIctRef = ta.change(time("D", timeZone)) != 0
+in940_5m = not na(time("5", "0940-0945", timeZone))
+if newDayIctRef
+    ref945_5m_940close := na
+if isChart5m and in940_5m[1] and not in940_5m
+    ref945_5m_940close := close[1]
+
+ictRef945 = isChart5m ? ref945_5m_940close : open945_1m
+
+sixAmOpenPct = not na(sixAmOpen_1m) and not na(ictRef945) and sixAmOpen_1m != 0.0 ? ((ictRef945 - sixAmOpen_1m) / sixAmOpen_1m) * 100.0 : na
+
+beforeICTOpeningDisplay = isChart5m ? na(ref945_5m_940close) : not na(time(timeframe.period, "0000-0944", timeZone))
+
+string sixAmOpenText = na
+color sixAmOpenColor = tblNaColor
+
+if beforeICTOpeningDisplay
+    sixAmOpenText := "—"
+    sixAmOpenColor := tblNaColor
+else if not na(sixAmOpenPct)
+    sixAmOpenText := str.tostring(sixAmOpenPct, "#.###") + "%"
+    sixAmOpenColor := tblInsideColor
+else
+    sixAmOpenText := "—"
+    sixAmOpenColor := tblNaColor
+
+// ICT opening icon (🟢 if ref > 6:00 open, 🔴 if below; 5m ref = 9:40 bar close)
+string ictOpeningIconText = "—"
+color  ictOpeningIconColor = tblNaColor
+
+if beforeICTOpeningDisplay
+    ictOpeningIconText := "—"
+    ictOpeningIconColor := tblNaColor
+else if not na(sixAmOpenPct)
+    if sixAmOpenPct > 0
+        ictOpeningIconText := "Above"
+        ictOpeningIconColor := color.new(color.green, 0)
+    else if sixAmOpenPct < 0
+        ictOpeningIconText := "Below"
+        ictOpeningIconColor := color.new(color.red, 0)
+    else
+        ictOpeningIconText := "—"
+        ictOpeningIconColor := tblNaColor
+else
+    ictOpeningIconText := "—"
+    ictOpeningIconColor := tblNaColor
+// ─────────────────────────────────────────────────────────────────────────────
+// Plot VWAPs & 9 EMA (no bands)
+// ─────────────────────────────────────────────────────────────────────────────
+plot(showVwapsOnChart and showVwap1 and inS1 and not na(vwap1) ? vwap1 : na, "VWAP 1", vwap1Color, 2, plot.style_linebr)
+plot(showVwapsOnChart and showVwap2 and inS2 and not na(vwap2) ? vwap2 : na, "VWAP 2", vwap2Color, 2, plot.style_linebr)
+plot(showEma9 and not na(ema9) ? ema9 : na, "9 EMA", ema9Color, ema9Width, plot.style_line)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Key levels — plots & labels
+// ─────────────────────────────────────────────────────────────────────────────
+kl_line_col = color.rgb(0, 0, 0)
+plot(kl_enabled and timeframe.isintraday and chk_kl_yh ? kl_yesterdayHigh : na, "KL PD.H", kl_line_col, 1, show_last = kl_bar_num)
+plot(kl_enabled and timeframe.isintraday and chk_kl_yl ? kl_yesterdayLow : na, "KL PD.L", kl_line_col, 1, show_last = kl_bar_num)
+plot(kl_enabled and (timeframe.isintraday or timeframe.isdaily) and chk_kl_lwh ? kl_lastweekHigh : na, "KL PWH", kl_line_col, 1, show_last = kl_bar_num)
+plot(kl_enabled and (timeframe.isintraday or timeframe.isdaily) and chk_kl_lwl ? kl_lastweekLow : na, "KL PWL", kl_line_col, 1, show_last = kl_bar_num)
+plot(kl_enabled and (timeframe.isintraday or timeframe.isdaily or timeframe.isweekly) and chk_kl_lmh ? kl_lastmonthHigh : na, "KL PMH", kl_line_col, 1, show_last = kl_bar_num)
+plot(kl_enabled and (timeframe.isintraday or timeframe.isdaily or timeframe.isweekly) and chk_kl_lml ? kl_lastmonthLow : na, "KL PML", kl_line_col, 1, show_last = kl_bar_num)
+
+if kl_enabled and kl_show_labels
+    if chk_kl_yh and timeframe.isintraday
+        kl_lbl_yh = label.new(bar_index + kl_label_position, kl_yesterdayHigh, "PD.H", style = label.style_none, textcolor = kl_color_labels, size = kl_lbl_size, textalign = text.align_right)
+        label.delete(kl_lbl_yh[1])
+    if chk_kl_yl and timeframe.isintraday
+        kl_lbl_yl = label.new(bar_index + kl_label_position, kl_yesterdayLow, "PD.L", style = label.style_none, textcolor = kl_color_labels, size = kl_lbl_size, textalign = text.align_right)
+        label.delete(kl_lbl_yl[1])
+    if chk_kl_lwh and (timeframe.isintraday or timeframe.isdaily)
+        kl_lbl_lwh = label.new(bar_index + kl_label_position, kl_lastweekHigh, "PWH", style = label.style_none, textcolor = kl_color_labels, size = kl_lbl_size, textalign = text.align_right)
+        label.delete(kl_lbl_lwh[1])
+    if chk_kl_lwl and (timeframe.isintraday or timeframe.isdaily)
+        kl_lbl_lwl = label.new(bar_index + kl_label_position, kl_lastweekLow, "PWL", style = label.style_none, textcolor = kl_color_labels, size = kl_lbl_size, textalign = text.align_right)
+        label.delete(kl_lbl_lwl[1])
+    if chk_kl_lmh and (timeframe.isintraday or timeframe.isdaily or timeframe.isweekly)
+        kl_lbl_lmh = label.new(bar_index + kl_label_position, kl_lastmonthHigh, "PMH", style = label.style_none, textcolor = kl_color_labels, size = kl_lbl_size, textalign = text.align_right)
+        label.delete(kl_lbl_lmh[1])
+    if chk_kl_lml and (timeframe.isintraday or timeframe.isdaily or timeframe.isweekly)
+        kl_lbl_lml = label.new(bar_index + kl_label_position, kl_lastmonthLow, "PML", style = label.style_none, textcolor = kl_color_labels, size = kl_lbl_size, textalign = text.align_right)
+        label.delete(kl_lbl_lml[1])
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional Sessions — bgcolor (exchange-time windows)
+// ─────────────────────────────────────────────────────────────────────────────
+is_in_trading_session = not na(time(timeframe.period, trading_session, addSessTzResolved))
+bgcolor(is_trading_session and is_in_trading_session ? color.new(trading_session_color, trading_session_transp) : na)
+
+is_in_trading_session2 = not na(time(timeframe.period, trading_session2, addSessTzResolved))
+bgcolor(is_trading_session2 and is_in_trading_session2 ? color.new(trading_session2_color, trading_session2_transp) : na)
+
+is_in_trading_session3 = not na(time(timeframe.period, trading_session3, addSessTzResolved))
+bgcolor(is_trading_session3 and is_in_trading_session3 ? color.new(trading_session3_color, trading_session3_transp) : na)
+
+is_in_trading_session4 = not na(time(timeframe.period, trading_session4, addSessTzResolved))
+bgcolor(is_trading_session4 and is_in_trading_session4 ? color.new(trading_session4_color, trading_session4_transp) : na)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Table — Position, Size, Layout
+// ─────────────────────────────────────────────────────────────────────────────
+pos = tablePosition == "Top Left" ? position.top_left : tablePosition == "Top Right" ? position.top_right : tablePosition == "Bottom Left" ? position.bottom_left : position.bottom_right
+sz  = tableSize == "Tiny" ? size.tiny : tableSize == "Small" ? size.small : tableSize == "Large" ? size.large : size.normal
+verticalLayout = tableLayout == "Vertical"
+
+var table infoTable = table.new(pos, 26, 26, bgcolor = tblColABgColor, border_width = tblBorderWidth, border_color = tblBorderColor)
+
+if barstate.islast
+    statusColor = switch status
+        1  => tblInsideColor
+        -1 => tblInsideColor
+        0  => tblInsideColor
+        => color.gray
+    statusColor5m = switch status5m
+        1  => tblInsideColor
+        -1 => tblInsideColor
+        0  => tblInsideColor
+        => color.gray
+    statusColorIbr = switch statusIbr
+        1  => tblInsideColor
+        -1 => tblInsideColor
+        0  => tblInsideColor
+        => color.gray
+    gapTypeColor = gapTypeText == "Gap Up" ? color.green : gapTypeText == "Gap Down" ? color.red : color.gray
+    priorDayColor = priorDayText == "Above" ? color.green : priorDayText == "Below" ? color.red : priorDayText == "Inside" ? tblInsideColor : color.gray
+    eightAmColor = eightAmText == "Bullish" ? color.green : eightAmText == "Bearish" ? color.red : color.gray
+
+    if verticalLayout
+        int rowIdx = 0
+        if showColTicker
+            table.cell(infoTable, 0, rowIdx, "Ticker", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, displayTicker, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColNYVWAP
+            table.cell(infoTable, 0, rowIdx, "NY VWAP", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(vwapStatusText) ? "—" : vwapStatusText, text_color = (na(vwapStatusText) or vwapStatusText == "—") ? tblNaColor : tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColOvernightVWAP
+            table.cell(infoTable, 0, rowIdx, "Overnight VWAP", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(overnightVwapStatusText) ? "—" : overnightVwapStatusText, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColPDNYVWAP
+            table.cell(infoTable, 0, rowIdx, "PD NY VWAP", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(pdNyVwapStatusText) ? "—" : pdNyVwapStatusText, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColBidOffer
+            table.cell(infoTable, 0, rowIdx, "Bid/Offer", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(BidOfferText) ? "—" : BidOfferText, text_color = (na(BidOfferText) or BidOfferText == "—") ? tblNaColor : BidOfferColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColGapType
+            table.cell(infoTable, 0, rowIdx, "Gap Type", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(gapTypeText) ? "—" : gapTypeText, text_color = gapTypeColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColGapPct
+            table.cell(infoTable, 0, rowIdx, "Gap %", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, gapPctStr, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColPriorDay
+            table.cell(infoTable, 0, rowIdx, "Prior day", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(priorDayText) ? "—" : priorDayText, text_color = priorDayColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showCol8amCandle
+            table.cell(infoTable, 0, rowIdx, "8AM Candle", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(eightAmText) ? "—" : eightAmText, text_color = eightAmColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColMidnightOpen
+            table.cell(infoTable, 0, rowIdx, "Midnight open", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(midnightOpenText) ? "—" : midnightOpenText, text_color = (na(midnightOpenText) or midnightOpenText == "—") ? tblNaColor : midnightOpenColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColTrend
+            table.cell(infoTable, 0, rowIdx, "Trend", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(trendText) ? "—" : trendText, text_color = trendColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColICTOpening
+            table.cell(infoTable, 0, rowIdx, "ICT opening", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, ictOpeningIconText, text_color = (ictOpeningIconText == "—") ? tblNaColor : ictOpeningIconColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showCol6amOpen
+            table.cell(infoTable, 0, rowIdx, "ICT opening (%)", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, sixAmOpenText, text_color = sixAmOpenColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColORBStats
+            table.merge_cells(infoTable, 0, rowIdx, 1, rowIdx)
+            table.cell(infoTable, 0, rowIdx, orbStatsMergedText, text_color = tblValueColor, text_size = sz, bgcolor = tblStatMergeBg, text_halign = text.align_center)
+            rowIdx += 1
+        if showColOpeningRange
+            table.cell(infoTable, 0, rowIdx, "Opening Range", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, openingRangeTableText, text_color = openingRangeTableColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColOrbSize
+            table.cell(infoTable, 0, rowIdx, "ORB size (%)", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, orbSizePctStr, text_color = (orbSizePctStr == "—") ? tblNaColor : tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColFormedFirst
+            table.cell(infoTable, 0, rowIdx, "Formed first", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, formedFirstText_1m, text_color = (formedFirstText_1m == "—") ? tblNaColor : formedFirstColor_1m, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColIBStats
+            table.merge_cells(infoTable, 0, rowIdx, 1, rowIdx)
+            table.cell(infoTable, 0, rowIdx, ibStatsMergedText, text_color = tblValueColor, text_size = sz, bgcolor = tblStatMergeBg, text_halign = text.align_center)
+            rowIdx += 1
+        if showColOpeningRange5m
+            table.cell(infoTable, 0, rowIdx, "Opening Range II", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            openingRange5mDisplay = beforeOROpen ? "—" : (na(statusText5m) ? "—" : statusText5m)
+            openingRange5mColor = beforeOROpen ? color.gray : statusColor5m
+            table.cell(infoTable, 1, rowIdx, openingRange5mDisplay, text_color = openingRange5mColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColIBRange
+            table.cell(infoTable, 0, rowIdx, "Initial Balance", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, ibRangeTableText, text_color = ibRangeTableColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColIBSize
+            table.cell(infoTable, 0, rowIdx, "IB size (%)", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, ibSizePctStr, text_color = (ibSizePctStr == "—") ? tblNaColor : tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColIBFormedFirst
+            table.cell(infoTable, 0, rowIdx, "IB formed first", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, formedFirstIBText_1m, text_color = (formedFirstIBText_1m == "—") ? tblNaColor : formedFirstIBColor_1m, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+        if showColC2
+            table.cell(infoTable, 0, rowIdx, "C2", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, 1, rowIdx, na(c2Text) ? "—" : c2Text, text_color = c2Color, text_size = sz, bgcolor = tblColBBgColor)
+            rowIdx += 1
+    else
+        int colIdx = 0
+        if showColTicker
+            table.cell(infoTable, colIdx, 0, "Ticker", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, displayTicker, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColNYVWAP
+            table.cell(infoTable, colIdx, 0, "NY VWAP", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(vwapStatusText) ? "—" : vwapStatusText, text_color = (na(vwapStatusText) or vwapStatusText == "—") ? tblNaColor : tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColOvernightVWAP
+            table.cell(infoTable, colIdx, 0, "Overnight VWAP", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(overnightVwapStatusText) ? "—" : overnightVwapStatusText, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColPDNYVWAP
+            table.cell(infoTable, colIdx, 0, "PD NY VWAP", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(pdNyVwapStatusText) ? "—" : pdNyVwapStatusText, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColBidOffer
+            table.cell(infoTable, colIdx, 0, "Bid/Offer", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(BidOfferText) ? "—" : BidOfferText, text_color = (na(BidOfferText) or BidOfferText == "—") ? tblNaColor : BidOfferColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColGapType
+            table.cell(infoTable, colIdx, 0, "Gap Type", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(gapTypeText) ? "—" : gapTypeText, text_color = gapTypeColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColGapPct
+            table.cell(infoTable, colIdx, 0, "Gap %", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, gapPctStr, text_color = tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColPriorDay
+            table.cell(infoTable, colIdx, 0, "Prior day", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(priorDayText) ? "—" : priorDayText, text_color = priorDayColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showCol8amCandle
+            table.cell(infoTable, colIdx, 0, "8AM Candle", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(eightAmText) ? "—" : eightAmText, text_color = eightAmColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColMidnightOpen
+            table.cell(infoTable, colIdx, 0, "Midnight open", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(midnightOpenText) ? "—" : midnightOpenText, text_color = (na(midnightOpenText) or midnightOpenText == "—") ? tblNaColor : midnightOpenColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColTrend
+            table.cell(infoTable, colIdx, 0, "Trend", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(trendText) ? "—" : trendText, text_color = trendColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColICTOpening
+            table.cell(infoTable, colIdx, 0, "ICT opening", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, ictOpeningIconText, text_color = (ictOpeningIconText == "—") ? tblNaColor : ictOpeningIconColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showCol6amOpen
+            table.cell(infoTable, colIdx, 0, "ICT opening %", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, sixAmOpenText, text_color = sixAmOpenColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColOpeningRange
+            table.cell(infoTable, colIdx, 0, "Opening Range", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, openingRangeTableText, text_color = openingRangeTableColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColOrbSize
+            table.cell(infoTable, colIdx, 0, "ORB size (%)", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, orbSizePctStr, text_color = (orbSizePctStr == "—") ? tblNaColor : tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColFormedFirst
+            table.cell(infoTable, colIdx, 0, "Formed first", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, formedFirstText_1m, text_color = (formedFirstText_1m == "—") ? tblNaColor : formedFirstColor_1m, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColOpeningRange5m
+            table.cell(infoTable, colIdx, 0, "Opening Range II", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            openingRange5mDisplay = beforeOROpen ? "—" : (na(statusText5m) ? "—" : statusText5m)
+            openingRange5mColor = beforeOROpen ? color.gray : statusColor5m
+            table.cell(infoTable, colIdx, 1, openingRange5mDisplay, text_color = openingRange5mColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColIBRange
+            table.cell(infoTable, colIdx, 0, "Initial Balance", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, ibRangeTableText, text_color = ibRangeTableColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColIBSize
+            table.cell(infoTable, colIdx, 0, "IB size (%)", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, ibSizePctStr, text_color = (ibSizePctStr == "—") ? tblNaColor : tblValueColor, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColIBFormedFirst
+            table.cell(infoTable, colIdx, 0, "IB formed first", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, formedFirstIBText_1m, text_color = (formedFirstIBText_1m == "—") ? tblNaColor : formedFirstIBColor_1m, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+        if showColC2
+            table.cell(infoTable, colIdx, 0, "C2", text_color = tblHeaderColor, text_size = sz, bgcolor = tblColABgColor)
+            table.cell(infoTable, colIdx, 1, na(c2Text) ? "—" : c2Text, text_color = c2Color, text_size = sz, bgcolor = tblColBBgColor)
+            colIdx += 1
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Key levels — alerts (price vs prior D/W/M H/L)
+// ─────────────────────────────────────────────────────────────────────────────
+kl_al_co_yh = kl_enabled and chk_kl_yh and ta.crossover(close, kl_yesterdayHigh)
+kl_al_cu_yl = kl_enabled and chk_kl_yl and ta.crossunder(close, kl_yesterdayLow)
+kl_al_co_lwh = kl_enabled and chk_kl_lwh and ta.crossover(close, kl_lastweekHigh)
+kl_al_cu_lwl = kl_enabled and chk_kl_lwl and ta.crossunder(close, kl_lastweekLow)
+kl_al_co_lmh = kl_enabled and chk_kl_lmh and ta.crossover(close, kl_lastmonthHigh)
+kl_al_cu_lml = kl_enabled and chk_kl_lml and ta.crossunder(close, kl_lastmonthLow)
+
+alertcondition(kl_al_co_yh, title = "KL: Cross over yesterday's High", message = "Price crosses over yesterday's High")
+alertcondition(kl_al_cu_yl, title = "KL: Cross under yesterday's Low", message = "Price crosses under yesterday's Low")
+alertcondition(kl_al_co_lwh, title = "KL: Cross over last week's High", message = "Price crosses over last week's High")
+alertcondition(kl_al_cu_lwl, title = "KL: Cross under last week's Low", message = "Price crosses under last week's Low")
+alertcondition(kl_al_co_lmh, title = "KL: Cross over last month's High", message = "Price crosses over last month's High")
+alertcondition(kl_al_cu_lml, title = "KL: Cross under last month's Low", message = "Price crosses under last month's Low")
