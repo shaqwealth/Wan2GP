@@ -1,0 +1,114 @@
+//@version=6
+// ws-killzones — Session / Killzone highlighter
+// Draws a high-low box around the Paris, London, New York and Asia sessions,
+// plus up to four extra background-highlighted time windows.
+indicator("ws-killzones", shorttitle = "ws-killzones", overlay = true, max_boxes_count = 500, max_labels_count = 500)
+
+// ═════════════════════════════ Sessions ═════════════════════════════
+grpS = "Sessions"
+grpA = "Additional Sessions"
+
+maxBoxCount = input.int(5, title = "Maximum box count", minval = 1, maxval = 500, group = grpS,
+  tooltip = "How many past session boxes to keep on the chart, per session.")
+lineWidth   = input.int(1, title = "Line width", minval = 0, maxval = 4, group = grpS)
+showLabels  = input.bool(false, title = "Show session labels", group = grpS)
+
+useCustomTz = input.bool(false, title = "Use custom time zone", group = grpS, inline = "tz")
+customTz    = input.string("America/New_York", title = "", group = grpS, inline = "tz",
+  tooltip = "When off, session times are read in the exchange's time zone (original behaviour).")
+tz = useCustomTz ? customTz : syminfo.timezone
+
+defaultParisColor  = color.new(#aac2d5, 0)
+defaultLondonColor = color.new(#aac2d5, 0)
+defaultUSAColor    = color.new(#c11a00, 30)
+defaultAsiaColor   = color.new(#FFFFED, 0)
+
+// Each row: enable · session time · border colour · background colour
+paris                = input.bool(true, title = "Paris Session", group = grpS, inline = "paris")
+Paris                = input.session("0200-0400", title = "", group = grpS, inline = "paris")
+ParisBorderColor     = input.color(#969f9f00, title = "", group = grpS, inline = "paris")
+ParisBackgroundColor = input.color(defaultParisColor, title = "", group = grpS, inline = "paris")
+
+london                = input.bool(true, title = "London Session", group = grpS, inline = "london")
+London                = input.session("0900-1000", title = "", group = grpS, inline = "london")
+LondonBorderColor     = input.color(#a0aaaa00, title = "", group = grpS, inline = "london")
+LondonBackgroundColor = input.color(defaultLondonColor, title = "", group = grpS, inline = "london")
+
+usa                = input.bool(true, title = "New York Session", group = grpS, inline = "usa")
+USA                = input.session("0900-1200", title = "", group = grpS, inline = "usa")
+USABorderColor     = input.color(#aa909000, title = "", group = grpS, inline = "usa")
+USABackgroundColor = input.color(defaultUSAColor, title = "", group = grpS, inline = "usa")
+
+asia                = input.bool(true, title = "Asia Session", group = grpS, inline = "asia")
+Asia                = input.session("1700-0400", title = "", group = grpS, inline = "asia")
+AsiaBorderColor     = input.color(#90999500, title = "", group = grpS, inline = "asia")
+AsiaBackgroundColor = input.color(defaultAsiaColor, title = "", group = grpS, inline = "asia")
+
+// ════════════════════════ Session box engine ════════════════════════
+// Every call site of this function keeps its own `var` state, so one call
+// per session is all that is needed to track / draw / prune that session.
+drawSession(bool enabled, string sess, color borderCol, color bgCol, string txt) =>
+    var box       activeBox = na
+    var array<box> boxes    = array.new<box>()
+    var float     sessHigh  = na
+    var float     sessLow   = na
+
+    bool inSess  = enabled and not na(time(timeframe.period, sess, tz))
+    bool prevIn  = na(inSess[1]) ? false : inSess[1]
+    bool newSess = inSess and not prevIn
+
+    if newSess
+        sessHigh  := high
+        sessLow   := low
+        activeBox := box.new(time, sessHigh, time_close, sessLow, xloc = xloc.bar_time,
+          border_color = borderCol, border_width = lineWidth, border_style = line.style_solid,
+          bgcolor = bgCol)
+        array.push(boxes, activeBox)
+        if showLabels
+            label.new(time, sessHigh, txt, xloc = xloc.bar_time, yloc = yloc.price,
+              style = label.style_label_down, textcolor = color.new(borderCol, 0),
+              color = color.new(color.black, 100), size = size.small)
+        // Keep only the most recent `maxBoxCount` boxes, on every timeframe.
+        while array.size(boxes) > maxBoxCount
+            box.delete(array.shift(boxes))
+    else if inSess and not na(activeBox)
+        sessHigh := math.max(sessHigh, high)
+        sessLow  := math.min(sessLow, low)
+        box.set_top(activeBox, sessHigh)
+        box.set_bottom(activeBox, sessLow)
+        box.set_right(activeBox, time_close)
+    activeBox
+
+drawSession(paris,  Paris,  ParisBorderColor,  ParisBackgroundColor,  "Paris")
+drawSession(london, London, LondonBorderColor, LondonBackgroundColor, "London")
+drawSession(usa,    USA,    USABorderColor,    USABackgroundColor,    "New York")
+drawSession(asia,   Asia,   AsiaBorderColor,   AsiaBackgroundColor,   "Asia")
+
+// ═══════════════════ Additional trading sessions ═══════════════════
+is_trading_session      = input.bool(false, title = "Highlight Trading Session 1?", group = grpA)
+trading_session         = input.session("0850-0910", title = "Trading Session 1 (Exchange Time)", group = grpA)
+trading_session_color   = input.color(color.yellow, title = "Trading Session 1 Color", group = grpA)
+trading_session_transp  = input.int(90, title = "Trading Session 1 Transparency", minval = 0, maxval = 100, group = grpA)
+is_in_trading_session   = time(timeframe.period, trading_session, tz)
+bgcolor(is_trading_session and not na(is_in_trading_session) ? color.new(trading_session_color, trading_session_transp) : na, title = "Trading Session 1")
+
+is_trading_session2     = input.bool(false, title = "Highlight Trading Session 2?", group = grpA)
+trading_session2        = input.session("0950-1010", title = "Trading Session 2 (Exchange Time)", group = grpA)
+trading_session2_color  = input.color(color.blue, title = "Trading Session 2 Color", group = grpA)
+trading_session2_transp = input.int(90, title = "Trading Session 2 Transparency", minval = 0, maxval = 100, group = grpA)
+is_in_trading_session2  = time(timeframe.period, trading_session2, tz)
+bgcolor(is_trading_session2 and not na(is_in_trading_session2) ? color.new(trading_session2_color, trading_session2_transp) : na, title = "Trading Session 2")
+
+is_trading_session3     = input.bool(false, title = "Highlight Trading Session 3?", group = grpA)
+trading_session3        = input.session("1050-1110", title = "Trading Session 3 (Exchange Time)", group = grpA)
+trading_session3_color  = input.color(color.yellow, title = "Trading Session 3 Color", group = grpA)
+trading_session3_transp = input.int(90, title = "Trading Session 3 Transparency", minval = 0, maxval = 100, group = grpA)
+is_in_trading_session3  = time(timeframe.period, trading_session3, tz)
+bgcolor(is_trading_session3 and not na(is_in_trading_session3) ? color.new(trading_session3_color, trading_session3_transp) : na, title = "Trading Session 3")
+
+is_trading_session4     = input.bool(false, title = "Highlight Trading Session 4?", group = grpA)
+trading_session4        = input.session("1150-1210", title = "Trading Session 4 (Exchange Time)", group = grpA)
+trading_session4_color  = input.color(color.blue, title = "Trading Session 4 Color", group = grpA)
+trading_session4_transp = input.int(90, title = "Trading Session 4 Transparency", minval = 0, maxval = 100, group = grpA)
+is_in_trading_session4  = time(timeframe.period, trading_session4, tz)
+bgcolor(is_trading_session4 and not na(is_in_trading_session4) ? color.new(trading_session4_color, trading_session4_transp) : na, title = "Trading Session 4")
